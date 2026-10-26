@@ -134,6 +134,12 @@ export class Game {
       this.state = 'title';
       window.addEventListener('resize', () => this.resize());
       (window as any).__game = this;
+      if (this.params.has('gpuprobe')) {
+        // Test mode for headless WebGPU: render offscreen and show the result as an image.
+        await this.probeOffscreen();
+        (this as any).stillDone = true;
+        return;
+      }
       if (this.params.has('still')) {
         // Test mode: render a few frames then stop (for slow software renderers).
         this.enter(false);
@@ -147,6 +153,43 @@ export class Game {
       console.error(err);
       ui.error(err?.message ?? String(err));
     }
+  }
+
+  private async probeOffscreen() {
+    const w = 960, h = 540;
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+    const rt = new THREE.RenderTarget(w, h, { type: THREE.HalfFloatType });
+    for (let i = 0; i < 2; i++) {
+      this.updateWorld(0.016);
+      this.renderer.setRenderTarget(rt);
+      this.renderer.render(this.scene, this.camera);
+      this.renderer.setRenderTarget(null);
+    }
+    const px = await this.renderer.readRenderTargetPixelsAsync(rt, 0, 0, w, h) as Uint16Array;
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    const ctx = cv.getContext('2d')!;
+    const img = ctx.createImageData(w, h);
+    const f = (v: number) => THREE.DataUtils.fromHalfFloat(v);
+    const flip = !(this.renderer.backend as any).isWebGPUBackend;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const si = ((flip ? h - 1 - y : y) * w + x) * 4, di = (y * w + x) * 4;
+        for (let c = 0; c < 3; c++) {
+          let v = f(px[si + c]) * this.renderer.toneMappingExposure;
+          v = v / (1 + v); // simple Reinhard for preview only
+          img.data[di + c] = Math.round(Math.pow(Math.min(1, v), 1 / 2.2) * 255);
+        }
+        img.data[di + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    const out = new Image();
+    out.src = cv.toDataURL();
+    out.style.cssText = 'position:fixed;inset:0;z-index:100;width:100%;height:100%;object-fit:contain;background:#000';
+    document.body.appendChild(out);
+    this.renderer.domElement.style.display = 'none';
   }
 
   private wireUI() {
@@ -174,7 +217,13 @@ export class Game {
   }
 
   private enter(lock: boolean) {
-    if (lock) this.input.lock();
+    if (lock) {
+      this.input.lock();
+      // Some embedded pages can't capture the mouse; fall back to drag-to-look.
+      setTimeout(() => {
+        if (this.state === 'playing' && !this.input.locked) this.ui.toast('Drag to look', 'Mouse capture is unavailable here', 3500);
+      }, 700);
+    }
     this.audio.start(this.settings.volume);
     this.audio.resume();
     const first = this.state === 'title';
@@ -222,6 +271,11 @@ export class Game {
     const input = this.input;
 
     if (this.state === 'playing') {
+      if (input.hit('Escape') && !input.locked) {
+        this.state = 'paused';
+        this.audio.suspend();
+        this.ui.paused();
+      }
       if (input.hit('F3')) { this.settings.showFps = !this.settings.showFps; saveSettings(this.settings); }
       const fast = input.down('KeyT');
       this.sky.timeScale = fast ? 90 : this.settings.timeScale;

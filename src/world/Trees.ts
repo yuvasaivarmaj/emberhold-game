@@ -22,15 +22,15 @@ interface Species {
 }
 
 const SPECIES: Record<string, Species> = {
-  oakL: { preset: 'Oak Large', height: [16, 23], leafTint: 0xd8e6c0 },
-  oakM: { preset: 'Oak Medium', height: [11, 16], leafTint: 0xe2ecc8 },
-  ashL: { preset: 'Ash Large', height: [15, 21], leafTint: 0xe8f0d0 },
-  ashM: { preset: 'Ash Medium', height: [10, 15], leafTint: 0xeef3d6 },
+  oakL: { preset: 'Oak Large', height: [16, 23], leafTint: 0xd9e2a8 },
+  oakM: { preset: 'Oak Medium', height: [11, 16], leafTint: 0xe2e6b0 },
+  ashL: { preset: 'Ash Large', height: [15, 21], leafTint: 0xe4e8b4 },
+  ashM: { preset: 'Ash Medium', height: [10, 15], leafTint: 0xe8ebba },
   aspen: { preset: 'Aspen Medium', height: [12, 17], leafTint: 0xa9cf86 },
-  pineL: { preset: 'Pine Large', height: [18, 27], leafTint: 0xc7d6c0 },
-  pineM: { preset: 'Pine Medium', height: [11, 17], leafTint: 0xcfdcc6 },
-  bush1: { preset: 'Bush 1', height: [1.4, 2.4], leafTint: 0xd5e3bd, bush: true },
-  bush2: { preset: 'Bush 2', height: [1.1, 2.0], leafTint: 0xe0e8c4, bush: true },
+  pineL: { preset: 'Pine Large', height: [18, 27], leafTint: 0xc2cfa6 },
+  pineM: { preset: 'Pine Medium', height: [11, 17], leafTint: 0xcad6ac },
+  bush1: { preset: 'Bush 1', height: [1.4, 2.4], leafTint: 0xd6dea6, bush: true },
+  bush2: { preset: 'Bush 2', height: [1.1, 2.0], leafTint: 0xdee4b0, bush: true },
 };
 
 export interface TreeInstance {

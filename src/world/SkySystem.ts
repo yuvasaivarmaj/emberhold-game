@@ -50,6 +50,7 @@ export class SkySystem {
   readonly uFogSunColor = uniform(new THREE.Color(1, 0.8, 0.6));
   readonly uFogDensity = uniform(0.00075);
   readonly uNight = uniform(0);
+  readonly uTwilight = uniform(0);
   readonly uSunColor = uniform(new THREE.Color(1, 1, 1));
   readonly uWind = uniform(1);
 
@@ -126,6 +127,8 @@ export class SkySystem {
     mat.fog = false;
     mat.blending = THREE.AdditiveBlending;
     const uNight = this.uNight;
+    const uTw = this.uTwilight;
+    const uSun = this.uSunDir;
     const uMoon = this.uMoonDir;
     mat.colorNode = Fn(() => {
       const dir = positionWorld.sub(cameraPosition).normalize();
@@ -152,7 +155,15 @@ export class SkySystem {
       const disc = smoothstep(0.99955, 0.9997, md);
       const glow = pow(max(md, 0.0), 300.0).mul(0.25).add(pow(max(md, 0.0), 12.0).mul(0.03));
       const moon = vec3(1.0, 0.97, 0.9).mul(disc.mul(2.2).add(glow));
-      return vec4(stars.add(milky).mul(above).add(moon.mul(smoothstep(-0.05, 0.05, uMoon.y))).mul(uNight), 1.0);
+      // Twilight: the physical sky model goes dark right after sunset, so paint the
+      // afterglow ourselves: warm along the horizon toward the sun, deep blue above.
+      const sunFlat = vec3(uSun.x, 0.0, uSun.z).normalize();
+      const toward = max(dot(vec3(dir.x, 0.0, dir.z).normalize(), sunFlat), 0.0);
+      const horizon = pow(float(1).sub(max(dir.y, 0.0)), 5.0);
+      const warm = vec3(0.55, 0.24, 0.1).mul(pow(toward, 2.0)).add(vec3(0.16, 0.1, 0.2));
+      const twGlow = mix(vec3(0.015, 0.03, 0.09), warm, horizon).mul(smoothstep(-0.25, 0.02, dir.y));
+      const night = stars.add(milky).mul(above).add(moon.mul(smoothstep(-0.05, 0.05, uMoon.y))).mul(uNight);
+      return vec4(night.add(twGlow.mul(uTw)), 1.0);
     })();
     const dome = new THREE.Mesh(new THREE.SphereGeometry(3500, 48, 24), mat);
     dome.frustumCulled = false;
@@ -203,8 +214,11 @@ export class SkySystem {
     this.sun.target.position.copy(camPos);
     this.sun.target.updateMatrixWorld();
 
-    this.hemi.intensity = 0.03 + 0.07 * day;
-    this.hemi.color.setRGB(0.55 + 0.2 * day, 0.68 + 0.15 * day, 1.0);
+    // Twilight peaks just after sunset and before sunrise.
+    const tw = sstep(-0.24, -0.02, sunY) * (1 - sstep(0.0, 0.14, sunY));
+    this.uTwilight.value = tw;
+    this.hemi.intensity = 0.03 + 0.07 * day + 0.22 * tw;
+    this.hemi.color.setRGB(0.55 + 0.2 * day, 0.68 + 0.15 * day - 0.1 * tw, 1.0);
     this.hemi.groundColor.setRGB(0.29 * (0.3 + day), 0.25 * (0.3 + day), 0.19 * (0.3 + day));
 
     // Fog/haze colour follows the horizon.

@@ -14,7 +14,7 @@ export class Water {
   constructor(sky: SkySystem) {
     const geo = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, 32, 32);
     geo.rotateX(-Math.PI / 2);
-    const mat = new THREE.MeshStandardNodeMaterial({ transparent: true, depthWrite: false });
+    const mat = new THREE.MeshPhysicalNodeMaterial({ transparent: true, depthWrite: false });
     const xz = positionWorld.xz;
     const flow = vec2(1.0, 0.12).mul(time.mul(0.9));
 
@@ -43,20 +43,22 @@ export class Water {
     const behind = viewportSharedTexture(refrUV).rgb;
 
     // Beer-Lambert absorption: green-brown river water.
-    const absorb = vec3(0.45, 0.22, 0.16);
+    const absorb = vec3(0.6, 0.32, 0.26);
     const transmit = exp(absorb.mul(thickness).mul(-1.2));
-    const deep = color(0x0f2a26).mul(sky.uSunColor.length().mul(0.25).add(0.03));
+    const deep = color(0x1a2a1c).mul(sky.uSunColor.length().mul(0.25).add(0.03));
     const murk = float(1).sub(exp(thickness.mul(-0.65)));
     const body = mix(behind.mul(transmit), deep, murk.mul(0.85));
 
     // Foam where the water meets the bank or stones.
     const foamNoise = mx_noise_float(xz.mul(2.2).sub(flow.mul(1.6))).mul(0.5).add(0.5);
-    const foam = smoothstep(0.35, 0.0, thickness).mul(smoothstep(0.35, 0.75, foamNoise)).mul(0.6);
+    const foam = smoothstep(0.12, 0.0, thickness).mul(smoothstep(0.45, 0.8, foamNoise)).mul(0.35);
 
     mat.colorNode = mix(vec3(0.0), vec3(0.85), foam);
     mat.emissiveNode = body.mul(float(1).sub(foam));
     mat.roughnessNode = mix(mix(float(0.04), float(0.12), smoothstep(20.0, 160.0, camDist)), float(0.6), foam);
     mat.metalnessNode = float(0);
+    // Without reflections of the banks, a full-strength sky reflection reads too blue.
+    mat.specularIntensity = 0.4;
     // Fade the very edge so the shoreline isn't a hard line.
     mat.opacityNode = smoothstep(0.0, 0.08, thickness);
 
