@@ -1,0 +1,95 @@
+:root {
+  --ink: #ece4d6;
+  --ink-dim: #b9ae9c;
+  --ink-faint: #8a8070;
+  --ash: #0e0c0b;
+  --ash-2: #191512;
+  --panel: rgba(14, 11, 9, 0.78);
+  --line: rgba(236, 228, 214, 0.16);
+  --ember: #e07a3c;
+  --ember-hot: #f4a25e;
+  --display: 'Cinzel', 'Trajan Pro', Georgia, serif;
+  --body: 'EB Garamond', Georgia, 'Times New Roman', serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--ash); color: var(--ink); font-family: var(--body); }
+#app, #app canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+.screen {
+  position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; z-index: 10;
+  background:
+    radial-gradient(ellipse at 50% 120%, rgba(224, 122, 60, 0.22), transparent 60%),
+    radial-gradient(ellipse at 50% 40%, rgba(25, 21, 18, 0.55), rgba(8, 7, 6, 0.92));
+}
+#pause, #settings { background: rgba(6, 5, 4, 0.55); backdrop-filter: blur(6px); }
+#start { background:
+    linear-gradient(to bottom, rgba(8,7,6,0.15), rgba(8,7,6,0.35) 55%, rgba(8,7,6,0.85)),
+    radial-gradient(ellipse at 50% 130%, rgba(224, 122, 60, 0.25), transparent 60%); }
+[hidden] { display: none !important; }
+
+.panel { max-width: 640px; width: 100%; padding: 36px 32px; }
+.panel.center { text-align: center; }
+.panel.wide { max-width: 720px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+#pause .panel { max-width: 380px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+
+h1 {
+  font-family: var(--display); font-weight: 700; letter-spacing: 0.08em; font-size: clamp(30px, 6vw, 58px);
+  margin: 6px 0 0; line-height: 1.05; text-shadow: 0 2px 30px rgba(224, 122, 60, 0.25);
+}
+h2 { font-family: var(--display); font-weight: 500; letter-spacing: 0.12em; font-size: 26px; margin: 0; }
+.eyebrow { font-family: var(--display); letter-spacing: 0.32em; text-transform: uppercase; font-size: 12px; color: var(--ember-hot); margin: 0; }
+.rule { width: 120px; height: 1px; margin: 20px auto; background: linear-gradient(90deg, transparent, var(--ember), transparent); }
+.panel.wide .rule { margin-left: 0; }
+.lede { font-size: 19px; color: var(--ink-dim); font-style: italic; margin: 0 auto 26px; max-width: 460px; line-height: 1.45; }
+.status { color: var(--ink-faint); font-size: 15px; margin-top: 12px; min-height: 1.3em; }
+.fine { color: var(--ink-faint); font-size: 13px; margin-top: 18px; }
+
+.bar { width: min(360px, 80%); height: 3px; margin: 26px auto 0; background: rgba(236, 228, 214, 0.12); border-radius: 2px; overflow: hidden; }
+#bar-fill { width: 0%; height: 100%; background: linear-gradient(90deg, var(--ember), var(--ember-hot)); transition: width 0.25s ease; box-shadow: 0 0 12px var(--ember); }
+
+button { font-family: var(--display); letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer; border-radius: 3px; }
+button.primary {
+  display: inline-block; padding: 14px 34px; font-size: 14px; color: #1a120c; border: 0;
+  background: linear-gradient(180deg, var(--ember-hot), var(--ember)); box-shadow: 0 0 24px rgba(224, 122, 60, 0.35);
+}
+button.primary:hover { filter: brightness(1.08); }
+button.secondary { display: block; margin: 12px auto 0; padding: 12px 30px; font-size: 13px; color: var(--ink); background: transparent; border: 1px solid var(--line); }
+button.secondary:hover { border-color: var(--ember); }
+button.link { margin-top: 18px; background: none; border: 0; color: var(--ink-dim); font-size: 12px; text-decoration: underline; text-underline-offset: 4px; }
+#pause button.primary { display: block; width: 100%; }
+#pause button.secondary { width: 100%; }
+
+.controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 18px; margin-top: 28px; color: var(--ink-dim); font-size: 15px; }
+kbd {
+  font-family: ui-monospace, Menlo, monospace; font-size: 11px; padding: 2px 6px; margin-right: 3px; border-radius: 3px;
+  border: 1px solid var(--line); background: rgba(236, 228, 214, 0.06); color: var(--ink);
+}
+
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 28px; }
+.grid label { display: flex; flex-direction: column; gap: 8px; font-size: 16px; color: var(--ink-dim); }
+.grid label output { float: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+.grid label.check { flex-direction: row; align-items: center; gap: 10px; }
+.grid small { color: var(--ink-faint); font-size: 13px; }
+select, input[type=range] { width: 100%; accent-color: var(--ember); }
+select { font-family: var(--body); font-size: 16px; padding: 8px; background: var(--ash-2); color: var(--ink); border: 1px solid var(--line); border-radius: 3px; }
+input[type=checkbox] { accent-color: var(--ember); width: 18px; height: 18px; }
+.row { display: flex; justify-content: flex-end; margin-top: 28px; }
+
+#hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+.crosshair { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: rgba(255, 248, 235, 0.8); box-shadow: 0 0 3px rgba(0,0,0,0.6); }
+.clock { position: absolute; top: 18px; right: 22px; font-family: var(--display); letter-spacing: 0.14em; font-size: 13px; color: rgba(236, 228, 214, 0.85); text-shadow: 0 1px 6px rgba(0,0,0,0.6); text-transform: uppercase; }
+.fps { position: absolute; top: 18px; left: 22px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #d8f0c8; text-shadow: 0 1px 3px #000; white-space: pre; }
+.toast {
+  position: absolute; left: 50%; top: 18%; transform: translateX(-50%); text-align: center; opacity: 0; transition: opacity 1.6s ease;
+  font-family: var(--display); letter-spacing: 0.24em; text-transform: uppercase; text-shadow: 0 2px 18px rgba(0,0,0,0.7);
+}
+.toast.show { opacity: 1; }
+.toast .big { font-size: clamp(20px, 3.4vw, 34px); }
+.toast .small { font-family: var(--body); font-style: italic; letter-spacing: 0.04em; text-transform: none; font-size: 18px; color: var(--ink-dim); margin-top: 6px; }
+.hint { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); font-size: 14px; color: rgba(236, 228, 214, 0.55); text-shadow: 0 1px 4px #000; transition: opacity 2s; }
+
+@media (max-width: 640px) {
+  .grid { grid-template-columns: 1fr; }
+  .panel { padding: 28px 16px; }
+}

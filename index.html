@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>The Blood of Emberhold</title>
+  <meta name="description" content="The Blood of Emberhold: a first-person open-world prototype. Explore the Verdance around Emberhold." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=EB+Garamond:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./src/ui/style.css" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <div id="hud" hidden>
+    <div class="crosshair"></div>
+    <div id="clock" class="clock"></div>
+    <div id="fps" class="fps" hidden></div>
+    <div id="toast" class="toast"></div>
+    <div id="hint" class="hint">Hold <kbd>T</kbd> to let time pass · <kbd>Esc</kbd> menu</div>
+  </div>
+
+  <section id="loading" class="screen">
+    <div class="panel center">
+      <p class="eyebrow">Part One · What the Blood Remembers</p>
+      <h1>The Blood of Emberhold</h1>
+      <div class="rule"></div>
+      <div class="bar"><div id="bar-fill"></div></div>
+      <p id="load-status" class="status">Preparing…</p>
+    </div>
+  </section>
+
+  <section id="start" class="screen" hidden>
+    <div class="panel center">
+      <p class="eyebrow">Prototype · The Verdance</p>
+      <h1>The Blood of Emberhold</h1>
+      <div class="rule"></div>
+      <p class="lede">South bank of the Silverrun. Across the river, on the hill, Emberhold will one day stand.</p>
+      <button id="enter" class="primary">Enter the world</button>
+      <div class="controls">
+        <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move</span>
+        <span><kbd>Mouse</kbd> look</span>
+        <span><kbd>Shift</kbd> run</span>
+        <span><kbd>Space</kbd> jump</span>
+        <span><kbd>C</kbd> crouch</span>
+        <span><kbd>T</kbd> pass time</span>
+        <span><kbd>Esc</kbd> menu</span>
+      </div>
+      <button class="link" data-open-settings>Settings</button>
+      <p id="renderer-info" class="fine"></p>
+    </div>
+  </section>
+
+  <section id="pause" class="screen" hidden>
+    <div class="panel center">
+      <h2>Paused</h2>
+      <div class="rule"></div>
+      <button id="resume" class="primary">Resume</button>
+      <button class="secondary" data-open-settings>Settings</button>
+      <p class="fine">Click Resume to recapture the mouse.</p>
+    </div>
+  </section>
+
+  <section id="settings" class="screen" hidden>
+    <div class="panel wide">
+      <h2>Settings</h2>
+      <div class="rule"></div>
+      <div class="grid">
+        <label>Graphics quality
+          <select id="s-quality">
+            <option value="low">Low: older laptops</option>
+            <option value="medium">Medium: most laptops</option>
+            <option value="high">High: gaming PCs</option>
+            <option value="ultra">Ultra: powerful GPUs</option>
+          </select>
+          <small id="s-quality-note">Changing quality reloads the world.</small>
+        </label>
+        <label>Field of view <output id="o-fov"></output>
+          <input id="s-fov" type="range" min="55" max="100" step="1" />
+        </label>
+        <label>Mouse sensitivity <output id="o-sens"></output>
+          <input id="s-sens" type="range" min="0.2" max="3" step="0.05" />
+        </label>
+        <label>Volume <output id="o-vol"></output>
+          <input id="s-vol" type="range" min="0" max="1" step="0.05" />
+        </label>
+        <label>Time of day <output id="o-hour"></output>
+          <input id="s-hour" type="range" min="0" max="24" step="0.1" />
+        </label>
+        <label>Day length <output id="o-ts"></output>
+          <select id="s-ts">
+            <option value="0">Frozen</option>
+            <option value="0.5">48 minutes</option>
+            <option value="1">24 minutes</option>
+            <option value="2">12 minutes</option>
+            <option value="6">4 minutes</option>
+          </select>
+        </label>
+        <label class="check"><input id="s-invert" type="checkbox" /> Invert mouse Y</label>
+        <label class="check"><input id="s-bob" type="checkbox" /> Head bob</label>
+        <label class="check"><input id="s-fps" type="checkbox" /> Show frame rate</label>
+      </div>
+      <div class="row">
+        <button id="settings-close" class="primary">Done</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="error" class="screen" hidden>
+    <div class="panel center">
+      <h2>Something went wrong</h2>
+      <p id="error-text" class="lede"></p>
+      <p class="fine">This game needs a recent version of Chrome, Edge, Firefox or Safari with hardware acceleration turned on.</p>
+    </div>
+  </section>
+
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>
