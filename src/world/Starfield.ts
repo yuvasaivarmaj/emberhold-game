@@ -40,9 +40,10 @@ export class Starfield {
   readonly uUp = uniform(new THREE.Vector3(0, 1, 0));
   readonly uPx = uniform(3);          // world units per pixel at the star sphere
   readonly uScorpio = uniform(0);     // extra emphasis on Scorpius (cinematics)
-  static RADIUS = 3000;
+  readonly radius: number;
 
-  private constructor(data: Float32Array, uNight: any) {
+  private constructor(data: Float32Array, uNight: any, radius: number) {
+    this.radius = radius;
     const n = data.length / 6;
     const geo = new THREE.InstancedBufferGeometry();
     const quad = new THREE.PlaneGeometry(1, 1);
@@ -75,7 +76,7 @@ export class Starfield {
     // Brightness relative to a magnitude-1 star; brighter stars also grow a little.
     const flux = pow(float(10.0), mag.sub(1.0).mul(-0.4)).add(scorpio.mul(1.5));
     const sizePx = clamp(flux.sqrt().mul(2.6).add(2.2), 2.2, 9.0).add(scorpio.mul(3.0));
-    const center = cameraPosition.add(world.mul(Starfield.RADIUS));
+    const center = cameraPosition.add(world.mul(radius));
     const off = positionGeometry.xy.mul(sizePx).mul(this.uPx);
     mat.positionNode = center.add(this.uRight.mul(off.x)).add(this.uUp.mul(off.y));
 
@@ -97,10 +98,10 @@ export class Starfield {
     this.mesh.name = 'Stars';
   }
 
-  static async load(uNight: any): Promise<Starfield> {
+  static async load(uNight: any, radius = 3000): Promise<Starfield> {
     const res = await fetch(new URL('./data/stars.bin', document.baseURI).toString());
     const buf = await res.arrayBuffer();
-    return new Starfield(new Float32Array(buf), uNight);
+    return new Starfield(new Float32Array(buf), uNight, radius);
   }
 
   update(camera: THREE.PerspectiveCamera, rot: THREE.Matrix3, viewportHeightPx: number) {
@@ -109,7 +110,7 @@ export class Starfield {
     this.uRight.value.set(e[0], e[1], e[2]).normalize();
     this.uUp.value.set(e[4], e[5], e[6]).normalize();
     const radPerPx = ((camera.fov * Math.PI) / 180) / Math.max(1, viewportHeightPx);
-    this.uPx.value = radPerPx * Starfield.RADIUS;
+    this.uPx.value = radPerPx * this.radius;
   }
 }
 

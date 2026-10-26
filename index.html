@@ -36,8 +36,17 @@
       <p class="eyebrow">Prototype · The Verdance</p>
       <h1>The Blood of Emberhold</h1>
       <div class="rule"></div>
-      <p class="lede">South bank of the Silverrun. Across the river, on the hill, Emberhold will one day stand.</p>
-      <button id="enter" class="primary">Enter the world</button>
+      <div class="menu">
+        <button id="continue" class="primary" hidden>Continue<span id="continue-sub" class="sub"></span></button>
+        <button id="newgame" class="secondary">New game</button>
+      </div>
+      <div id="confirm-new" class="confirm" hidden>
+        <p>Start the story from the beginning? Your current progress will be replaced.</p>
+        <div class="row-c">
+          <button id="confirm-yes" class="primary">Start over</button>
+          <button id="confirm-no" class="secondary">Keep my progress</button>
+        </div>
+      </div>
       <div class="controls">
         <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move</span>
         <span><kbd>Mouse</kbd> look</span>
@@ -106,6 +115,23 @@
       <div class="row">
         <button id="settings-close" class="primary">Done</button>
       </div>
+    </div>
+  </section>
+
+  <section id="cine" hidden>
+    <div id="flash"></div>
+    <div id="cine-title"></div>
+    <p id="subtitle"></p>
+    <div id="skip"><span>Hold <kbd>Space</kbd> to skip</span><div class="skip-bar"><div id="skip-fill"></div></div></div>
+  </section>
+
+  <section id="clicktoplay" class="screen" hidden>
+    <div class="panel center">
+      <p class="eyebrow" id="ctp-eyebrow"></p>
+      <h2 id="ctp-title"></h2>
+      <div class="rule"></div>
+      <p class="lede" id="ctp-text"></p>
+      <button id="ctp-go" class="primary">Begin</button>
     </div>
   </section>
 

@@ -5,14 +5,21 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 
 export class UI {
   private settingsReturn: 'start' | 'pause' = 'start';
-  onEnter: (() => void) | null = null;
+  onContinue: (() => void) | null = null;
+  onNewGame: (() => void) | null = null;
   onResume: (() => void) | null = null;
   onSettingsChange: ((s: UserSettings, qualityChanged: boolean) => void) | null = null;
   onHourChange: ((h: number) => void) | null = null;
   getHour: (() => number) | null = null;
 
   constructor(private settings: UserSettings) {
-    $('enter').addEventListener('click', () => this.onEnter?.());
+    $('continue').addEventListener('click', () => this.onContinue?.());
+    $('newgame').addEventListener('click', () => {
+      if (!$('continue').hidden) { $('confirm-new').hidden = false; return; }
+      this.onNewGame?.();
+    });
+    $('confirm-yes').addEventListener('click', () => { $('confirm-new').hidden = true; this.onNewGame?.(); });
+    $('confirm-no').addEventListener('click', () => { $('confirm-new').hidden = true; });
     $('resume').addEventListener('click', () => this.onResume?.());
     document.querySelectorAll('[data-open-settings]').forEach((b) =>
       b.addEventListener('click', () => this.openSettings($('pause').hidden ? 'start' : 'pause')));
@@ -25,10 +32,32 @@ export class UI {
     $('load-status').textContent = text;
   }
 
-  showStart(info: string) {
+  showStart(info: string, save: { label: string } | null) {
     $('loading').hidden = true;
     $('start').hidden = false;
     $('renderer-info').textContent = info;
+    $('continue').hidden = !save;
+    $('confirm-new').hidden = true;
+    if (save) $('continue-sub').textContent = save.label;
+  }
+
+  /** Hide the menus while the opening film plays. */
+  cinematic() {
+    $('start').hidden = true;
+    $('pause').hidden = true;
+    $('settings').hidden = true;
+    $('hud').hidden = true;
+  }
+
+  /** A card shown after the film; the click also captures the mouse. */
+  clickToPlay(eyebrow: string, title: string, text: string): Promise<void> {
+    $('ctp-eyebrow').textContent = eyebrow;
+    $('ctp-title').textContent = title;
+    $('ctp-text').textContent = text;
+    $('clicktoplay').hidden = false;
+    return new Promise((resolve) => {
+      $('ctp-go').onclick = () => { $('clicktoplay').hidden = true; resolve(); };
+    });
   }
 
   playing() {

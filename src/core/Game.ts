@@ -12,6 +12,9 @@ import { Player } from '../player/Player';
 import { Viewmodel } from '../player/Viewmodel';
 import { GameAudio } from '../audio/Audio';
 import { Pipeline } from '../render/Pipeline';
+import { Prologue } from '../cinematic/Prologue';
+import { loadSave, writeSave, clearSave, timeAgo, type SaveData } from '../story/Save';
+import { chapterById } from '../story/Chapters';
 import { Input } from './Input';
 import { UI } from '../ui/UI';
 import { PRESETS, loadSettings, saveSettings, verticalFov, type UserSettings, type QualityPreset } from './Settings';
@@ -39,7 +42,12 @@ export class Game {
   hands!: Viewmodel;
   audio = new GameAudio();
   pipeline!: Pipeline;
-  state: 'loading' | 'title' | 'playing' | 'paused' = 'loading';
+  state: 'loading' | 'title' | 'cinematic' | 'ready' | 'playing' | 'paused' = 'loading';
+  prologue!: Prologue;
+  chapter = 'verdance';
+  private playSeconds = 0;
+  private autosaveTimer = 0;
+  private shownIntro = false;
   private clock = new THREE.Timer();
   private fpsFrames = 0;
   private fpsTime = 0;
@@ -133,6 +141,9 @@ export class Game {
       this.updateWorld(0.016, true);
 
       this.pipeline = new Pipeline(this.renderer, this.scene, this.camera, this.q);
+      ui.progress(0.9, 'Remembering Aethryn…');
+      this.prologue = new Prologue(this);
+      await this.prologue.init();
 
       ui.progress(0.92, 'Preparing shaders…');
       await nextFrame();
@@ -141,13 +152,23 @@ export class Game {
 
       this.wireUI();
       const backend = (this.renderer.backend as any).isWebGPUBackend ? 'WebGPU' : 'WebGL 2';
-      ui.showStart(`Renderer: ${backend} · Quality: ${this.settings.quality} · ${this.trees.count} trees`);
+      const save = loadSave();
+      ui.showStart(`Renderer: ${backend} · Quality: ${this.settings.quality} · ${this.trees.count} trees`,
+        save ? { label: `${chapterById(save.chapter).title} · saved ${timeAgo(save.savedAt)}` } : null);
       this.state = 'title';
       window.addEventListener('resize', () => this.resize());
       (window as any).__game = this;
       if (this.params.has('gpuprobe')) {
         // Test mode for headless WebGPU: render offscreen and show the result as an image.
         await this.probeOffscreen();
+        (this as any).stillDone = true;
+        return;
+      }
+      if (this.params.has('cineshot')) {
+        // Test mode: render one frame of the opening film.
+        this.state = 'cinematic';
+        ui.cinematic();
+        await this.prologue.debugRender(+(this.params.get('cineshot') ?? 0), +(this.params.get('cinet') ?? 3));
         (this as any).stillDone = true;
         return;
       }
@@ -205,7 +226,8 @@ export class Game {
 
   private wireUI() {
     const ui = this.ui;
-    ui.onEnter = () => this.enter(true);
+    ui.onContinue = () => this.continueGame();
+    ui.onNewGame = () => this.newGame();
     ui.onResume = () => this.enter(true);
     ui.getHour = () => this.sky.hour;
     ui.onHourChange = (h) => this.sky.setHour(h);
@@ -218,13 +240,64 @@ export class Game {
         location.reload();
       }
     };
+    window.addEventListener('beforeunload', () => { if (this.state === 'playing' || this.state === 'paused') this.save(); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden && this.state === 'playing') this.save(); });
     this.input.onLockChange = (locked) => {
       if (!locked && this.state === 'playing') {
+        this.save();
         this.state = 'paused';
         this.audio.suspend();
         ui.paused();
       }
     };
+  }
+
+  private continueGame() {
+    const save = loadSave();
+    if (save) {
+      this.chapter = save.chapter;
+      this.playSeconds = save.playSeconds;
+      this.player.setPose(save.x, save.y + 0.05, save.z, save.yaw, save.pitch);
+      this.sky.setHour(save.hour);
+    }
+    this.enter(true);
+  }
+
+  private newGame() {
+    clearSave();
+    this.audio.start(this.settings.volume);
+    this.audio.resume();
+    this.state = 'cinematic';
+    this.ui.cinematic();
+    this.prologue.play(async () => {
+      // The story proper begins: back in the present day of the Verdance.
+      this.chapter = 'verdance';
+      this.playSeconds = 0;
+      this.player.setPose(SPAWN.x, this.hf.height(SPAWN.x, SPAWN.z) + 0.05, SPAWN.z, SPAWN.yaw, 0);
+      this.player.update(0.016, this.input, this.settings);
+      this.sky.setHour(16.6);
+      this.sky.timeScale = this.settings.timeScale;
+      this.camera.fov = verticalFov(this.settings.fov, this.camera.aspect);
+      this.camera.updateProjectionMatrix();
+      this.state = 'ready';
+      const ch = chapterById('verdance');
+      await this.ui.clickToPlay(ch.part, ch.title, ch.objective);
+      this.save();
+      this.enter(true);
+    });
+  }
+
+  /** Used by the opening film to keep the world (terrain, grass, trees, sky) updating. */
+  cineWorldUpdate(dt: number) { this.updateWorld(dt); }
+
+  save() {
+    if (!this.player) return;
+    const p = this.player;
+    const d: SaveData = {
+      v: 1, chapter: this.chapter, x: p.feet.x, y: p.feet.y, z: p.feet.z, yaw: p.yaw, pitch: p.pitch,
+      hour: this.sky.hour, flags: {}, savedAt: Date.now(), playSeconds: Math.round(this.playSeconds),
+    };
+    writeSave(d);
   }
 
   private enter(lock: boolean) {
@@ -237,9 +310,11 @@ export class Game {
     }
     this.audio.start(this.settings.volume);
     this.audio.resume();
-    const first = this.state === 'title';
+    const first = !this.shownIntro;
+    this.shownIntro = true;
     this.state = 'playing';
     this.ui.playing();
+    this.hands.visible = this.settings.showHands;
     if (first) {
       setTimeout(() => this.ui.toast('The Verdance', 'South bank of the Silverrun'), 600);
       setTimeout(() => this.ui.hideHint(), 14000);
@@ -284,7 +359,16 @@ export class Game {
     const dt = Math.min(this.clock.getDelta(), 1 / 15);
     const input = this.input;
 
+    if (this.state === 'cinematic') {
+      this.prologue.update(dt);
+      input.endFrame();
+      return;
+    }
+
     if (this.state === 'playing') {
+      this.playSeconds += dt;
+      this.autosaveTimer += dt;
+      if (this.autosaveTimer > 20) { this.autosaveTimer = 0; this.save(); }
       if (input.hit('Escape') && !input.locked) {
         this.state = 'paused';
         this.audio.suspend();
@@ -305,7 +389,7 @@ export class Game {
         day: this.sky.dayFactor, riverDist: riverDistance(f.x, f.z), altitude: f.y,
         wind: 1, treesNear: this.treesNear(f),
       });
-    } else if (this.state === 'title') {
+    } else if (this.state === 'title' || this.state === 'ready') {
       // Gentle look-around behind the title screen.
       this.titleT += dt;
       this.camera.rotation.set(-0.02 + Math.sin(this.titleT * 0.11) * 0.015, this.player.yaw + Math.sin(this.titleT * 0.07) * 0.12, 0, 'YXZ');

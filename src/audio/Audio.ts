@@ -27,7 +27,8 @@ function noiseBuffer(ctx: AudioContext, seconds: number, kind: 'white' | 'pink' 
 
 export class GameAudio {
   ctx: AudioContext | null = null;
-  private master!: GainNode;
+  master!: GainNode;
+  private amb!: GainNode;
   private windGain!: GainNode;
   private windFilter!: BiquadFilterNode;
   private riverGain!: GainNode;
@@ -47,6 +48,8 @@ export class GameAudio {
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14; comp.ratio.value = 3;
     this.master.connect(comp).connect(ctx.destination);
+    this.amb = ctx.createGain();
+    this.amb.connect(this.master);
 
     this.white = noiseBuffer(ctx, 2, 'white');
     const pink = noiseBuffer(ctx, 6, 'pink');
@@ -58,7 +61,7 @@ export class GameAudio {
     this.windFilter = ctx.createBiquadFilter();
     this.windFilter.type = 'bandpass'; this.windFilter.frequency.value = 420; this.windFilter.Q.value = 0.6;
     this.windGain = ctx.createGain(); this.windGain.gain.value = 0.0;
-    wind.connect(this.windFilter).connect(this.windGain).connect(this.master);
+    wind.connect(this.windFilter).connect(this.windGain).connect(this.amb);
     wind.start();
 
     // River
@@ -72,12 +75,12 @@ export class GameAudio {
     const hg = ctx.createGain(); hg.gain.value = 0.35;
     river.connect(rf).connect(rf2).connect(this.riverGain);
     riverHiss.connect(hf).connect(hg).connect(this.riverGain);
-    this.riverGain.connect(this.master);
+    this.riverGain.connect(this.amb);
     river.start(); riverHiss.start();
 
     // Night insects: amplitude-modulated high tones
     this.nightGain = ctx.createGain(); this.nightGain.gain.value = 0;
-    this.nightGain.connect(this.master);
+    this.nightGain.connect(this.amb);
     for (const [freq, rate, pan] of [[4300, 22, -0.6], [4700, 27, 0.5], [3900, 18, 0.1]] as const) {
       const osc = ctx.createOscillator(); osc.frequency.value = freq;
       const am = ctx.createGain(); am.gain.value = 0;
@@ -92,6 +95,12 @@ export class GameAudio {
       osc.connect(am).connect(g).connect(p).connect(this.nightGain);
       osc.start(); lfo.start(); slow.start();
     }
+  }
+
+  /** Fade the world's ambience (wind, river, birds, insects) in or out. */
+  setAmbience(level: number, seconds = 1) {
+    if (!this.ctx) return;
+    this.amb.gain.setTargetAtTime(level, this.ctx.currentTime, Math.max(0.01, seconds / 3));
   }
 
   setVolume(v: number) {
@@ -132,7 +141,7 @@ export class GameAudio {
     const p = ctx.createStereoPanner(); p.pan.value = pan * 0.85;
     const g = ctx.createGain(); g.gain.value = level * 0.05;
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 6000 - Math.random() * 2500;
-    g.connect(lp).connect(p).connect(this.master);
+    g.connect(lp).connect(p).connect(this.amb);
     let t = t0;
     const base = 2200 + Math.random() * 2400;
     for (let i = 0; i < notes; i++) {
