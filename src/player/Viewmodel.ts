@@ -31,8 +31,6 @@ function skinMaterial() {
   const blotch = mx_noise_float(positionLocal.mul(35.0)).mul(0.5).add(0.5);
   const base = mix(color(0x8f5f45), color(0xa87458), n.mul(0.6));
   m.colorNode = mix(base, color(0x9a5446), smoothstep(0.6, 0.9, blotch).mul(0.35));
-  // A hint of light scattering through skin.
-  m.emissiveNode = color(0x5a1f12).mul(0.06);
   return m;
 }
 

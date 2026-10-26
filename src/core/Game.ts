@@ -91,6 +91,7 @@ export class Game {
 
       ui.progress(0.46, 'Lighting the sky…');
       this.sky = new SkySystem(this.scene, this.q);
+      await this.sky.loadStars();
       const hp = this.params.get('hour');
       this.sky.setHour(hp ? +hp : 16.6);
       this.sky.timeScale = this.settings.timeScale;
@@ -275,6 +276,7 @@ export class Game {
     this.camera.updateMatrixWorld();
     this.trees.update(this.camera);
     this.sky.update(dt, this.renderer, cam);
+    this.sky.updateStars(this.camera, this.renderer.domElement.height);
   }
 
   private frame() {

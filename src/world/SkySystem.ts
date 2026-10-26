@@ -1,16 +1,24 @@
 // Sky, sun and moon, day/night cycle, atmospheric fog, image-based lighting and stars.
 import * as THREE from 'three/webgpu';
 import {
-  Fn, uniform, float, vec3, vec4, mix, max, dot, smoothstep, pow, floor, fract, hash, uint,
-  positionWorld, cameraPosition, fog, densityFogFactor, time, sin, abs,
+  Fn, uniform, float, vec3, vec4, mix, max, dot, smoothstep, pow, exp,
+  positionWorld, cameraPosition, fog, densityFogFactor, mx_noise_float, mx_fractal_noise_float,
 } from 'three/tsl';
 import { SkyMesh } from 'three/addons/objects/SkyMesh.js';
 import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
+import { Starfield, equatorialToWorld, LATITUDE_DEG } from './Starfield';
 import type { QualityPreset } from '../core/Settings';
 
 const DEG = Math.PI / 180;
-const LATITUDE = 38 * DEG;
-const DECLINATION = 14 * DEG; // late summer
+const LATITUDE = LATITUDE_DEG * DEG;
+const DECLINATION = 14 * DEG;        // late summer
+const SUN_RA = 9.3 / 24 * Math.PI * 2; // the sun's right ascension at that time of year
+const MOON_OFFSET = 3.4 / 24 * Math.PI * 2;
+
+function eqVec(raDeg: number, decDeg: number) {
+  const a = raDeg * DEG, d = decDeg * DEG;
+  return new THREE.Vector3(Math.cos(d) * Math.cos(a), Math.cos(d) * Math.sin(a), Math.sin(d));
+}
 
 const _c1 = new THREE.Color();
 const _c2 = new THREE.Color();
@@ -51,6 +59,9 @@ export class SkySystem {
   readonly uFogDensity = uniform(0.00075);
   readonly uNight = uniform(0);
   readonly uTwilight = uniform(0);
+  readonly uRotT = uniform(new THREE.Matrix3());
+  readonly rot = new THREE.Matrix3();
+  stars: Starfield | null = null;
   readonly uSunColor = uniform(new THREE.Color(1, 1, 1));
   readonly uWind = uniform(1);
 
@@ -122,7 +133,7 @@ export class SkySystem {
   }
 
   private createStars() {
-    // Procedural star field + moon disc on a dome, added on top of the night sky.
+    // Sky dome drawn over the physical sky: Milky Way, moon with phase, twilight glow.
     const mat = new THREE.MeshBasicNodeMaterial({ side: THREE.BackSide, transparent: true, depthWrite: false });
     mat.fog = false;
     mat.blending = THREE.AdditiveBlending;
@@ -130,31 +141,40 @@ export class SkySystem {
     const uTw = this.uTwilight;
     const uSun = this.uSunDir;
     const uMoon = this.uMoonDir;
+    const uRotT = this.uRotT;
+    // Galactic north pole and galactic centre in equatorial coordinates.
+    const ngp = eqVec(192.859, 27.128);
+    const gc = eqVec(266.405, -28.936);
     mat.colorNode = Fn(() => {
       const dir = positionWorld.sub(cameraPosition).normalize();
-      const g = dir.mul(220.0);
-      const cell = floor(g);
-      const local = fract(g).sub(0.5);
-      const seed = uint(cell.x.add(512.0)).mul(uint(73856093))
-        .bitXor(uint(cell.y.add(512.0)).mul(uint(19349663)))
-        .bitXor(uint(cell.z.add(512.0)).mul(uint(83492791)));
-      const h = hash(seed);
-      const h2 = hash(seed.add(uint(7)));
-      const isStar = smoothstep(0.985, 0.999, h);
-      const d = local.length();
-      const core = smoothstep(0.32, 0.0, d);
-      const twinkle = sin(time.mul(h2.mul(3.0).add(1.0)).add(h2.mul(40.0))).mul(0.3).add(0.7);
-      const tint = mix(vec3(0.75, 0.82, 1.0), vec3(1.0, 0.9, 0.75), h2);
-      const above = smoothstep(-0.02, 0.15, dir.y);
-      // Faint milky band
-      const band = smoothstep(0.35, 0.0, abs(dot(dir, vec3(0.42, 0.55, -0.72).normalize())));
-      const stars = tint.mul(isStar.mul(core).mul(twinkle).mul(h2.mul(2.5).add(0.6)));
-      const milky = vec3(0.35, 0.38, 0.5).mul(band.mul(0.035));
-      // Moon
+      const above = smoothstep(-0.02, 0.12, dir.y);
+      // Milky Way: a band along the galactic plane, brightest toward the core beside Scorpius.
+      const j = uRotT.mul(dir).normalize();
+      const b = dot(j, vec3(ngp.x, ngp.y, ngp.z));
+      const toCore = dot(j, vec3(gc.x, gc.y, gc.z));
+      const band = exp(b.mul(b).mul(-28.0));
+      const bulge = exp(float(1).sub(toCore).mul(-3.2)).mul(exp(b.mul(b).mul(-9.0)));
+      const mottle = mx_fractal_noise_float(j.mul(9.0), 4, 2.0, 0.55).mul(0.5).add(0.5);
+      // The Great Rift: a dark dust lane splitting the band toward the core.
+      const bb = b.add(mx_noise_float(j.mul(5.0)).mul(0.05));
+      const rift = float(1).sub(exp(bb.mul(bb).mul(-900.0)).mul(0.55).mul(smoothstep(0.2, 0.9, toCore.add(0.4))));
+      const glowMW = band.mul(0.55).add(bulge.mul(1.1)).mul(mottle.mul(0.8).add(0.35)).mul(rift);
+      const milky = mix(vec3(0.5, 0.56, 0.75), vec3(0.95, 0.85, 0.7), bulge.clamp(0.0, 1.0)).mul(glowMW.mul(0.09));
+      // Airglow: the faint greenish light of a truly dark sky near the horizon.
+      const airglow = vec3(0.02, 0.035, 0.03).mul(pow(float(1).sub(max(dir.y, 0.0)), 3.0)).mul(0.25);
+      // Moon disc lit by the sun, so it shows its phase.
       const md = dot(dir, uMoon);
-      const disc = smoothstep(0.99955, 0.9997, md);
-      const glow = pow(max(md, 0.0), 300.0).mul(0.25).add(pow(max(md, 0.0), 12.0).mul(0.03));
-      const moon = vec3(1.0, 0.97, 0.9).mul(disc.mul(2.2).add(glow));
+      const R = float(0.0095);
+      const off = dir.sub(uMoon.mul(md));
+      const rr = off.length().div(R).clamp(0.0, 1.0);
+      const nrm = uMoon.negate().mul(float(1).sub(rr.mul(rr)).sqrt()).add(off.normalize().mul(rr));
+      const lit = smoothstep(-0.05, 0.15, dot(nrm, uSun));
+      const disc = smoothstep(R.cos(), R.mul(0.92).cos(), md);
+      const surface = mx_noise_float(off.mul(900.0)).mul(0.12).add(0.88);
+      const earthshine = 0.025;
+      const moonCol = vec3(1.0, 0.97, 0.9).mul(disc.mul(lit.mul(surface).mul(2.4).add(earthshine)));
+      const halo = pow(max(md, 0.0), 2000.0).mul(0.12).add(pow(max(md, 0.0), 40.0).mul(0.012));
+      const moon = moonCol.add(vec3(0.9, 0.92, 1.0).mul(halo));
       // Twilight: the physical sky model goes dark right after sunset, so paint the
       // afterglow ourselves: warm along the horizon toward the sun, deep blue above.
       const sunFlat = vec3(uSun.x, 0.0, uSun.z).normalize();
@@ -162,29 +182,39 @@ export class SkySystem {
       const horizon = pow(float(1).sub(max(dir.y, 0.0)), 5.0);
       const warm = vec3(0.55, 0.24, 0.1).mul(pow(toward, 2.0)).add(vec3(0.16, 0.1, 0.2));
       const twGlow = mix(vec3(0.015, 0.03, 0.09), warm, horizon).mul(smoothstep(-0.25, 0.02, dir.y));
-      const night = stars.add(milky).mul(above).add(moon.mul(smoothstep(-0.05, 0.05, uMoon.y))).mul(uNight);
+      const night = milky.add(airglow).mul(above).mul(uNight).add(moon.mul(smoothstep(-0.03, 0.03, uMoon.y)).mul(above));
       return vec4(night.add(twGlow.mul(uTw)), 1.0);
     })();
-    const dome = new THREE.Mesh(new THREE.SphereGeometry(3500, 48, 24), mat);
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(3500, 64, 32), mat);
     dome.frustumCulled = false;
     dome.renderOrder = -5;
     dome.onBeforeRender = (_r, _s, cam) => dome.position.copy(cam.position);
     this.scene.add(dome);
   }
 
+  /** Loads the star catalogue and adds the real night sky. */
+  async loadStars() {
+    try {
+      this.stars = await Starfield.load(this.uNight);
+      this.scene.add(this.stars.mesh);
+    } catch (e) {
+      console.warn('Star catalogue unavailable', e);
+    }
+  }
+
+  /** Local sidereal time (radians) for the current hour. */
+  get lst() { return ((this.hour - 12) / 24) * Math.PI * 2 + SUN_RA; }
+
   private computeDirections() {
-    const H = ((this.hour - 12) / 24) * Math.PI * 2;
-    const sinEl = Math.sin(LATITUDE) * Math.sin(DECLINATION) + Math.cos(LATITUDE) * Math.cos(DECLINATION) * Math.cos(H);
-    const el = Math.asin(sinEl);
-    const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(LATITUDE) - Math.tan(DECLINATION) * Math.cos(LATITUDE)) + Math.PI;
-    // az measured clockwise from north (-z) toward east (+x)
-    this.sunDir.set(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)).normalize();
-    // Moon roughly opposite, a little off-axis
-    const Hm = H + Math.PI * 0.97;
-    const sinElM = Math.sin(LATITUDE) * Math.sin(-DECLINATION * 0.6) + Math.cos(LATITUDE) * Math.cos(DECLINATION) * Math.cos(Hm);
-    const elM = Math.asin(sinElM);
-    const azM = Math.atan2(Math.sin(Hm), Math.cos(Hm) * Math.sin(LATITUDE) - Math.tan(-DECLINATION * 0.6) * Math.cos(LATITUDE)) + Math.PI;
-    this.moonDir.set(Math.sin(azM) * Math.cos(elM), Math.sin(elM), -Math.cos(azM) * Math.cos(elM)).normalize();
+    equatorialToWorld(this.lst, LATITUDE, this.rot);
+    (this.uRotT.value as THREE.Matrix3).copy(this.rot).transpose();
+    this.sunDir.copy(eqVec(SUN_RA * 180 / Math.PI, DECLINATION * 180 / Math.PI)).applyMatrix3(this.rot).normalize();
+    // A waxing crescent a few hours east of the sun: it sets in the evening, leaving dark nights.
+    this.moonDir.copy(eqVec((SUN_RA + MOON_OFFSET) * 180 / Math.PI, 6)).applyMatrix3(this.rot).normalize();
+  }
+
+  updateStars(camera: THREE.PerspectiveCamera, viewportHeightPx: number) {
+    this.stars?.update(camera, this.rot, viewportHeightPx);
   }
 
   update(dt: number, renderer: THREE.WebGPURenderer, camPos: THREE.Vector3) {
@@ -197,6 +227,8 @@ export class SkySystem {
 
     // Sky shader takes a position; distance only matters for its sun-fade term.
     this.sky.sunPosition.value.copy(this.sunDir);
+    // Clear, starry nights; a few more clouds by day.
+    this.sky.cloudCoverage.value = THREE.MathUtils.lerp(0.1, 0.38, day);
     this.envSky.sunPosition.value.copy(this.sunDir);
 
     // Key light: sun by day, moon by night.
@@ -207,7 +239,7 @@ export class SkySystem {
     let intensity = 4.4 * sstep(-0.02, 0.1, sunY) * (0.55 + 0.45 * warm);
     if (useMoon) {
       this.sun.color.setRGB(0.55, 0.65, 1.0);
-      intensity = 0.32 * sstep(-0.05, 0.25, this.moonDir.y) * (1 - day);
+      intensity = 0.12 * sstep(-0.05, 0.25, this.moonDir.y) * (1 - day);
     }
     this.sun.intensity = intensity;
     this.sun.position.copy(camPos).addScaledVector(keyDir, 800);
@@ -217,7 +249,7 @@ export class SkySystem {
     // Twilight peaks just after sunset and before sunrise.
     const tw = sstep(-0.24, -0.02, sunY) * (1 - sstep(0.0, 0.14, sunY));
     this.uTwilight.value = tw;
-    this.hemi.intensity = 0.03 + 0.07 * day + 0.22 * tw;
+    this.hemi.intensity = 0.055 + 0.045 * day + 0.22 * tw;
     this.hemi.color.setRGB(0.55 + 0.2 * day, 0.68 + 0.15 * day - 0.1 * tw, 1.0);
     this.hemi.groundColor.setRGB(0.29 * (0.3 + day), 0.25 * (0.3 + day), 0.19 * (0.3 + day));
 
