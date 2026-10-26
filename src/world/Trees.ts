@@ -5,13 +5,13 @@ import * as THREE from 'three/webgpu';
 import {
   Fn, float, vec2, vec3, uint, hash, sin, time, positionLocal, positionGeometry, instanceIndex,
   texture, max, dot, pow, positionWorld, cameraPosition, uv, mx_noise_float, instancedBufferAttribute,
-  atan, floor, mod, varying, transformNormalToView, normalize, color,
+  atan, floor, mod, varying, transformNormalToView, normalize, color, uniform, smoothstep,
 } from 'three/tsl';
 // @ts-ignore - ez-tree source module (JS)
 import { Tree } from 'ez-tree-src';
 import { Heightfield } from './Heightfield';
 import { Simplex2, mulberry32, smoothstep as sstep } from './Noise';
-import { WORLD_HALF, EMBERHOLD_SITE, SPAWN, riverDistance } from './WorldConfig';
+import { WORLD_HALF, EMBERHOLD_SITE, riverDistance, roadAt, forestAt, settlementAt } from './WorldConfig';
 import type { SkySystem } from './SkySystem';
 
 interface Species {
@@ -131,12 +131,16 @@ export class Trees {
   readonly instances: TreeInstance[] = [];
   private variants: Variant[] = [];
   private lastUpdate = new THREE.Vector3(1e9, 0, 0);
+  private uHide = uniform(200);
+  private static CELL = 256;
 
   constructor(
     private hf: Heightfield, private sky: SkySystem, density: number,
     private fullDistance: number, private midDistance: number, private a2c: boolean,
   ) {
     this.place(density);
+    this.buildGrid();
+    this.uHide.value = midDistance;
     const byKind = new Map<string, TreeInstance[]>();
     for (const t of this.instances) {
       if (!byKind.has(t.kind)) byKind.set(t.kind, []);
@@ -234,19 +238,23 @@ export class Trees {
     geo.index = quad.index;
     geo.setAttribute('position', quad.attributes.position);
     geo.setAttribute('uv', quad.attributes.uv);
+    // Every tree of this species gets a billboard; the shader hides the ones close
+    // enough to be drawn as real trees, so nothing needs re-uploading as you move.
     const inst = new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4);
     const yaw = new THREE.InstancedBufferAttribute(new Float32Array(n), 1);
-    inst.setUsage(THREE.DynamicDrawUsage); yaw.setUsage(THREE.DynamicDrawUsage);
+    v.members.forEach((t, i) => { inst.setXYZW(i, t.x, t.y, t.z, t.scale); yaw.setX(i, t.yaw); });
     geo.setAttribute('aInst', inst);
     geo.setAttribute('aYaw', yaw);
-    geo.instanceCount = 0;
+    geo.instanceCount = n;
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
 
     const mat = new THREE.MeshStandardNodeMaterial({ alphaTest: 0.45, side: THREE.DoubleSide });
     const aInst = instancedBufferAttribute(inst);
     const aYaw = instancedBufferAttribute(yaw);
     const center = aInst.xyz;
-    const s = aInst.w.mul(size);
+    const camD = vec2(cameraPosition.x.sub(center.x), cameraPosition.z.sub(center.z)).length();
+    const show = smoothstep(this.uHide.sub(6.0), this.uHide.add(6.0), camD);
+    const s = aInst.w.mul(size).mul(show);
     const toCam = vec2(cameraPosition.x.sub(center.x), cameraPosition.z.sub(center.z)).normalize();
     const right = vec3(toCam.y, 0.0, toCam.x.negate());
     const local = positionGeometry;
@@ -285,47 +293,68 @@ export class Trees {
   private place(density: number) {
     const noise = new Simplex2(777);
     const rand = mulberry32(99);
-    const spacing = 7.5 / Math.sqrt(Math.max(0.2, density));
+    const spacing = 11.5 / Math.sqrt(Math.max(0.2, density));
     const n = Math.floor((WORLD_HALF * 2 - 40) / spacing);
     const nrm = new THREE.Vector3();
     for (let j = 0; j < n; j++) {
       for (let i = 0; i < n; i++) {
         const x = -WORLD_HALF + 20 + (i + rand()) * spacing;
         const z = -WORLD_HALF + 20 + (j + rand()) * spacing;
-        const h = this.hf.height(x, z);
-        if (h < 1.4 || h > 175) continue;
-        this.hf.normal(x, z, nrm);
-        if (nrm.y < 0.82) continue;
-        const rd = riverDistance(x, z);
-        if (rd < 19) continue;
+        const forest = forestAt(x, z);
+        const r0 = rand();
+        const wd = riverDistance(x, z);
+        const riverside = wd < 45 && wd > 12 ? (1 - wd / 45) * 0.3 : 0;
+        // Forests from the land-use map, a scatter of lone trees, and willows/aspens by the water.
+        const p = forest * 0.9 + riverside + 0.004;
+        const bushP = (forest * (1 - forest) * 1.6 + riverside * 0.8) * 0.5;
+        if (r0 > p + bushP) continue;
+        if (roadAt(x, z) > 0.02 || settlementAt(x, z) > 0.1 || wd < 11) continue;
         const de = Math.hypot(x - EMBERHOLD_SITE.x, z - EMBERHOLD_SITE.z);
-        if (de < EMBERHOLD_SITE.radius + 25) continue;
-        const ds = Math.hypot(x - SPAWN.x, z - SPAWN.z);
-
-        const forest = sstep(0.12, 0.42, noise.fbm(x * 0.0032, z * 0.0032, 4));
-        const riverside = sstep(70, 24, rd) * 0.35;
-        const highland = sstep(55, 110, h);
-        let p = forest * 0.85 + riverside + 0.012; // a few lone meadow trees
-        p *= 1 - sstep(60, 26, ds) * 0.97;           // keep the spawn meadow open
-        p *= 1 - sstep(EMBERHOLD_SITE.radius + 120, EMBERHOLD_SITE.radius + 30, de) * 0.8;
-        if (rand() > p) {
-          // Bushes on forest edges and along the river
-          const pb = (forest * (1 - forest) * 2.2 + riverside * 0.8) * (1 - sstep(40, 15, ds));
-          if (rand() < pb * 0.5) {
-            this.instances.push({ kind: rand() < 0.5 ? 'bush1' : 'bush2', x, y: h - 0.1, z, scale: 0.7 + rand() * 0.6, yaw: rand() * Math.PI * 2, trunkRadius: 0, height: 0 });
-          }
+        if (de < EMBERHOLD_SITE.radius + 60) continue;
+        const h = this.hf.height(x, z);
+        if (h < 1.4 || h > 430) continue;
+        this.hf.normal(x, z, nrm);
+        if (nrm.y < 0.8) continue;
+        if (r0 > p) {
+          this.instances.push({ kind: rand() < 0.5 ? 'bush1' : 'bush2', x, y: h - 0.1, z, scale: 0.7 + rand() * 0.6, yaw: rand() * Math.PI * 2, trunkRadius: 0, height: 0 });
           continue;
         }
         let kind: string;
         const r = rand();
-        if (highland > 0.5 || noise.noise(x * 0.002 + 50, z * 0.002) > 0.45) kind = r < 0.6 ? 'pineL' : 'pineM';
-        else if (rd < 60) kind = r < 0.45 ? 'aspen' : r < 0.75 ? 'ashM' : 'oakM';
-        else kind = r < 0.32 ? 'oakL' : r < 0.55 ? 'oakM' : r < 0.78 ? 'ashL' : r < 0.9 ? 'ashM' : 'aspen';
+        const highland = h > 170 || noise.noise(x * 0.0009 + 50, z * 0.0009) > 0.5;
+        if (highland) kind = r < 0.6 ? 'pineL' : 'pineM';
+        else if (wd < 60) kind = r < 0.45 ? 'aspen' : r < 0.75 ? 'ashM' : 'oakM';
+        else kind = r < 0.34 ? 'oakL' : r < 0.58 ? 'oakM' : r < 0.8 ? 'ashL' : r < 0.9 ? 'ashM' : 'aspen';
         const sp = SPECIES[kind];
         const baseH = (sp.height[0] + sp.height[1]) / 2;
         const target = sp.height[0] + rand() * (sp.height[1] - sp.height[0]);
         this.instances.push({ kind, x, y: h - 0.25, z, scale: target / baseH, yaw: rand() * Math.PI * 2, trunkRadius: 0, height: target });
       }
+    }
+  }
+
+  /** Trees within a radius of a point (uses the spatial grid). */
+  near(x: number, z: number, radius: number, out: TreeInstance[] = []) {
+    const C = Trees.CELL;
+    const c0 = Math.floor((x - radius + WORLD_HALF) / C), c1 = Math.floor((x + radius + WORLD_HALF) / C);
+    const r0 = Math.floor((z - radius + WORLD_HALF) / C), r1 = Math.floor((z + radius + WORLD_HALF) / C);
+    const r2 = radius * radius;
+    for (let cz = r0; cz <= r1; cz++) for (let cx = c0; cx <= c1; cx++) {
+      const list = this.grid.get(cz * 1024 + cx);
+      if (!list) continue;
+      for (const t of list) if ((t.x - x) ** 2 + (t.z - z) ** 2 < r2) out.push(t);
+    }
+    return out;
+  }
+
+  private grid = new Map<number, TreeInstance[]>();
+  private buildGrid() {
+    const C = Trees.CELL;
+    for (const t of this.instances) {
+      const k = Math.floor((t.z + WORLD_HALF) / C) * 1024 + Math.floor((t.x + WORLD_HALF) / C);
+      let l = this.grid.get(k);
+      if (!l) { l = []; this.grid.set(k, l); }
+      l.push(t);
     }
   }
 
@@ -379,7 +408,7 @@ export class Trees {
     this.cull(camera);
   }
 
-  /** Decide each tree's level of detail (only when the player has moved a few metres). */
+  /** Decide each nearby tree's level of detail (only when the player has moved a few metres). */
   private assign(cam: THREE.Vector3) {
     this.lastUpdate.copy(cam);
     const m = new THREE.Matrix4();
@@ -388,39 +417,22 @@ export class Trees {
     const p = new THREE.Vector3();
     const up = new THREE.Vector3(0, 1, 0);
     const full2 = this.fullDistance ** 2;
-    const mid2 = this.midDistance ** 2;
     const bush2 = (this.midDistance * 0.6) ** 2;
-    for (const v of this.variants) {
-      let c2 = 0;
-      const imp = v.impostor;
-      v.cand[0].list.length = 0;
-      v.cand[1].list.length = 0;
-      for (const t of v.members) {
-        const d2 = (t.x - cam.x) ** 2 + (t.z - cam.z) ** 2;
-        let lod: number;
-        if (v.bush) lod = d2 < bush2 ? 0 : -1;
-        else lod = d2 < full2 ? 0 : d2 < mid2 || !imp ? 1 : 2;
-        if (lod < 0) continue;
-        if (lod === 2) {
-          imp!.inst.setXYZW(c2, t.x, t.y, t.z, t.scale);
-          imp!.yaw.setX(c2, t.yaw);
-          c2++;
-          continue;
-        }
-        q.setFromAxisAngle(up, t.yaw);
-        s.setScalar(t.scale);
-        p.set(t.x, t.y, t.z);
-        m.compose(p, q, s);
-        const c = v.cand[lod];
-        m.toArray(c.mats, c.list.length * 16);
-        c.list.push(t);
-      }
-      if (imp) {
-        imp.geo.instanceCount = c2;
-        imp.inst.needsUpdate = true;
-        imp.yaw.needsUpdate = true;
-        imp.mesh.visible = c2 > 0;
-      }
+    const kindIndex = new Map(this.variants.map((v, i) => [v.kind, i]));
+    for (const v of this.variants) { v.cand[0].list.length = 0; v.cand[1].list.length = 0; }
+    for (const t of this.near(cam.x, cam.z, this.midDistance)) {
+      const v = this.variants[kindIndex.get(t.kind)!];
+      const d2 = (t.x - cam.x) ** 2 + (t.z - cam.z) ** 2;
+      let lod: number;
+      if (v.bush) { if (d2 > bush2) continue; lod = 0; } else lod = d2 < full2 ? 0 : 1;
+      if (!v.impostor && lod === 1 && d2 > this.midDistance ** 2) continue;
+      q.setFromAxisAngle(up, t.yaw);
+      s.setScalar(t.scale);
+      p.set(t.x, t.y, t.z);
+      m.compose(p, q, s);
+      const c = v.cand[lod];
+      m.toArray(c.mats, c.list.length * 16);
+      c.list.push(t);
     }
   }
 

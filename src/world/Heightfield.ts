@@ -1,6 +1,7 @@
 // Holds the terrain heights and provides fast CPU sampling plus a GPU texture.
 import * as THREE from 'three/webgpu';
-import { WORLD_HALF, HF_N, CELL } from './WorldConfig';
+import { WORLD_HALF, HF_N, CELL, HEIGHT_MIN, HEIGHT_MAX, MASK_RES } from './Layout';
+import { setMask } from './WorldConfig';
 
 export class Heightfield {
   readonly data: Float32Array;
@@ -23,20 +24,56 @@ export class Heightfield {
     this.texture = tex;
   }
 
-  static load(onProgress: (p: number) => void): Promise<Heightfield> {
-    return new Promise((resolve, reject) => {
-      const worker = new Worker(new URL('./heightWorker.ts', import.meta.url), { type: 'module' });
-      worker.onmessage = (e) => {
-        if (e.data.type === 'progress') onProgress(e.data.p);
-        else if (e.data.type === 'done') {
-          worker.terminate();
-          resolve(new Heightfield(e.data.data));
-        }
-      };
-      worker.onerror = (e) => reject(e);
-      worker.postMessage('go');
-    });
+  /** Loads the baked map: heights, land-use mask and metadata. */
+  static async load(onProgress: (p: number) => void): Promise<Heightfield> {
+    const base = document.baseURI;
+    const get = async (file: string, weight: number, done: number) => {
+      const res = await fetch(new URL(`./data/${file}`, base).toString());
+      if (!res.ok) throw new Error(`Couldn't load the world map (${file}). Run npm run bake.`);
+      const total = +(res.headers.get('content-length') ?? 0);
+      if (!res.body || !total) { const b = await res.arrayBuffer(); onProgress(done + weight); return b; }
+      const reader = res.body.getReader();
+      const out = new Uint8Array(total);
+      let got = 0;
+      for (;;) {
+        const { done: end, value } = await reader.read();
+        if (end) break;
+        out.set(value, got); got += value.length;
+        onProgress(done + weight * (got / total));
+      }
+      return out.buffer;
+    };
+    const meta = await (await fetch(new URL('./data/verdance.json', base).toString())).json();
+    const h16 = new Uint16Array(await get('verdance.h16', 0.65, 0));
+    const mask = new Uint8Array(await get('verdance.mask', 0.17, 0.65));
+    const crops = new Uint8Array(await get('verdance.crops', 0.17, 0.82));
+    const data = new Float32Array(h16.length);
+    const span = (HEIGHT_MAX - HEIGHT_MIN) / 65535;
+    for (let i = 0; i < h16.length; i++) data[i] = HEIGHT_MIN + h16[i] * span;
+    onProgress(1);
+    const hf = new Heightfield(data);
+    hf.mask = mask;
+    hf.meta = meta;
+    setMask(mask);
+    const tex = new THREE.DataTexture(mask, MASK_RES, MASK_RES, THREE.RGBAFormat, THREE.UnsignedByteType);
+    tex.magFilter = THREE.LinearFilter;
+    tex.minFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    hf.maskTexture = tex;
+    const ctex = new THREE.DataTexture(crops, MASK_RES, MASK_RES, THREE.RGBAFormat, THREE.UnsignedByteType);
+    ctex.magFilter = THREE.LinearFilter;
+    ctex.minFilter = THREE.LinearFilter;
+    ctex.generateMipmaps = false;
+    ctex.needsUpdate = true;
+    hf.cropTexture = ctex;
+    return hf;
   }
+
+  mask!: Uint8Array;
+  maskTexture!: THREE.DataTexture;
+  cropTexture!: THREE.DataTexture;
+  meta: any;
 
   /** Raw sample at grid indices (clamped). */
   at(ix: number, iz: number): number {

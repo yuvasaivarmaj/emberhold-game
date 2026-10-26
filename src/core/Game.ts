@@ -63,7 +63,7 @@ export class Game {
     const qp = this.params.get('quality');
     if (qp && qp in PRESETS) this.settings.quality = qp as any;
     this.q = PRESETS[this.settings.quality];
-    this.camera = new THREE.PerspectiveCamera(verticalFov(this.settings.fov, innerWidth / innerHeight), innerWidth / innerHeight, 0.05, 6000);
+    this.camera = new THREE.PerspectiveCamera(verticalFov(this.settings.fov, innerWidth / innerHeight), innerWidth / innerHeight, 0.05, 9000);
     this.scene.add(this.camera);
     this.ui = new UI(this.settings);
   }
@@ -87,8 +87,8 @@ export class Game {
       await this.renderer.init();
       this.input = new Input(this.renderer.domElement);
 
-      ui.progress(0.05, 'Raising the land…');
-      this.hf = await Heightfield.load((p) => ui.progress(0.05 + p * 0.33, 'Raising the land…'));
+      ui.progress(0.05, 'Loading the Verdance…');
+      this.hf = await Heightfield.load((p) => ui.progress(0.05 + p * 0.33, 'Loading the Verdance…'));
 
       ui.progress(0.4, 'Settling the earth…');
       await this.physics.init();
@@ -130,6 +130,7 @@ export class Game {
       this.hands = new Viewmodel(this.camera);
       this.hands.visible = this.settings.showHands;
       this.restorePose();
+      this.physics.stream(this.player.feet, true);
       this.physics.step();
       const pos = this.params.get('pos');
       if (pos) {
@@ -350,6 +351,7 @@ export class Game {
     this.grass.update(this.camera);
     this.camera.updateMatrixWorld();
     this.trees.update(this.camera);
+    this.rocks.update(cam);
     this.sky.update(dt, this.renderer, cam);
     this.sky.updateStars(this.camera, this.renderer.domElement.height);
   }
@@ -378,6 +380,7 @@ export class Game {
       const fast = input.down('KeyT');
       this.sky.timeScale = fast ? 90 : this.settings.timeScale;
       const ev = this.player.update(dt, input, this.settings);
+      this.physics.stream(this.player.feet);
       this.hands.visible = this.settings.showHands;
       this.hands.update(dt, this.player, input.mouseDX, input.mouseDY);
       this.physics.step();

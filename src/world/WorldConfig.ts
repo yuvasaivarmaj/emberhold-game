@@ -1,37 +1,28 @@
-// Shared constants for the playable region around Emberhold (the Verdance).
-// 1 unit = 1 metre.
+// Runtime view of the world layout. Shapes and constants live in Layout.ts; this module
+// adds lookups into the baked land-use mask (distance to water, roads, land use).
+export {
+  WORLD_SIZE, WORLD_HALF, HF_RES, HF_N, CELL, WATER_LEVEL, SPAWN, EMBERHOLD, QUILLHAVEN, MASK_RES,
+} from './Layout';
+import { EMBERHOLD, WORLD_HALF, MASK_RES } from './Layout';
 
-export const WORLD_SIZE = 2048;          // metres, square
-export const WORLD_HALF = WORLD_SIZE / 2;
-export const HF_RES = 1024;              // heightfield cells per side
-export const HF_N = HF_RES + 1;          // samples per side
-export const CELL = WORLD_SIZE / HF_RES; // 2 m between samples
+/** Compatibility shape used by older modules: the fort's outer wall as a circle. */
+export const EMBERHOLD_SITE = { x: EMBERHOLD.x, z: EMBERHOLD.z, radius: EMBERHOLD.outerR };
 
-export const WATER_LEVEL = 0;
+let maskData: Uint8Array | null = null;
+export function setMask(m: Uint8Array) { maskData = m; }
 
-// Where Emberhold will stand (Phase 2). The terrain is levelled into a plateau here.
-export const EMBERHOLD_SITE = { x: 300, z: -470, radius: 140 };
-
-// The river runs west to east across the map. Its centre line as a function of x.
-export function riverZ(x: number): number {
-  return -60 + 110 * Math.sin(x * 0.0042 + 0.6) + 45 * Math.sin(x * 0.0113 + 2.1) + 12 * Math.sin(x * 0.031);
+function maskAt(x: number, z: number, ch: number) {
+  if (!maskData) return 0;
+  const mx = Math.max(0, Math.min(MASK_RES - 1, Math.floor(((x + WORLD_HALF) / (WORLD_HALF * 2)) * MASK_RES)));
+  const mz = Math.max(0, Math.min(MASK_RES - 1, Math.floor(((z + WORLD_HALF) / (WORLD_HALF * 2)) * MASK_RES)));
+  return maskData[(mz * MASK_RES + mx) * 4 + ch];
 }
 
-export function riverDzDx(x: number): number {
-  return 110 * 0.0042 * Math.cos(x * 0.0042 + 0.6) + 45 * 0.0113 * Math.cos(x * 0.0113 + 2.1) + 12 * 0.031 * Math.cos(x * 0.031);
-}
-
-// Distance (approximately perpendicular) from a point to the river centre line.
-export function riverDistance(x: number, z: number): number {
-  const d = Math.abs(z - riverZ(x));
-  const s = riverDzDx(x);
-  return d / Math.sqrt(1 + s * s);
-}
-
-// Player spawn: a meadow on the south bank, looking north-east across the river
-// toward the Emberhold hill.
-export const SPAWN = (() => {
-  const x = -160;
-  const z = riverZ(x) + 85;
-  return { x, z, yaw: Math.atan2(-(EMBERHOLD_SITE.x - x), -(EMBERHOLD_SITE.z - z)) };
-})();
+/** Metres to the nearest river or lake edge (0 in the water, capped at 255). */
+export function riverDistance(x: number, z: number) { return maskData ? maskAt(x, z, 3) : 999; }
+/** 0..1, 1 on a road. */
+export function roadAt(x: number, z: number) { return maskAt(x, z, 0) / 255; }
+/** 0..1, 1 inside Emberhold's walls or Quillhaven. */
+export function settlementAt(x: number, z: number) { return maskAt(x, z, 1) / 255; }
+/** 0..1 forest density. */
+export function forestAt(x: number, z: number) { return maskAt(x, z, 2) / 255; }

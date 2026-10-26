@@ -226,7 +226,7 @@ export const ANTARES = equatorial(16.4901, -26.432);
 export class ScorpiusLines {
   readonly mesh: THREE.LineSegments;
   readonly uOpacity = uniform(0);
-  private radius = 2900;
+  private radius = 7100;
 
   constructor() {
     const pts: number[] = [];

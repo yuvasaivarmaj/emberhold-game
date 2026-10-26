@@ -8,8 +8,8 @@ import {
   transformNormalToView, varying,
 } from 'three/tsl';
 import { Heightfield } from './Heightfield';
-import { WORLD_HALF, HF_N, CELL } from './WorldConfig';
-import { grassCoverage, meadowColor, PAL } from './TerrainShading';
+import { WORLD_HALF, HF_N, CELL } from './Layout';
+import { grassField, meadowColor, cropColor, PAL } from './TerrainShading';
 import type { GrassLayerSpec } from '../core/Settings';
 import type { SkySystem } from './SkySystem';
 
@@ -92,14 +92,15 @@ export class GrassLayer {
     const dhdz = mix(h01.sub(h00), h11.sub(h10), f.x).div(CELL);
     const groundN = vec3(dhdx.negate(), 1.0, dhdz.negate()).normalize();
 
-    const cover = grassCoverage(xz, groundN.y, hgt);
+    const gf = grassField(xz, groundN.y, hgt);
+    const cover = gf.x;
     const camDist = vec2(xz.x.sub(cameraPosition.x), xz.y.sub(cameraPosition.z)).length();
     let fade: any = float(1).sub(smoothstep(outerR.mul(0.72), outerR, camDist));
     if (innerR) fade = fade.mul(smoothstep(innerR.mul(0.75), innerR, camDist));
     const present = smoothstep(r4.sub(0.08), r4.add(0.08), cover);
     const tall = mx_noise_float(xz.mul(0.045)).mul(0.5).add(0.5);
     const bladeH = float(spec.height).mul(mix(0.2, 0.55, tall)).mul(r3.mul(0.55).add(0.7))
-      .mul(present).mul(fade).mul(cover.sqrt().mul(0.6).add(0.4));
+      .mul(present).mul(fade).mul(cover.sqrt().mul(0.6).add(0.4)).mul(gf.y);
     const bladeW = float(spec.width).mul(r1.mul(0.6).add(0.7)).mul(present.mul(fade).sqrt());
 
     // Orientation + static lean
@@ -131,7 +132,7 @@ export class GrassLayer {
     mat.normalNode = transformNormalToView(varying(n, 'vGrassNormal'));
 
     // Colour: dark, occluded roots to sunlit tips that match the meadow.
-    const meadow = meadowColor(xz);
+    const meadow = cropColor(xz, gf.w, meadowColor(xz));
     const tip = meadow.mul(r1.mul(0.3).add(1.15));
     const dryTip = mix(tip, PAL.grassDry, smoothstep(0.55, 0.95, r3).mul(0.4));
     const root = mix(meadow, PAL.grassDeep, 0.5).mul(0.55);

@@ -56,7 +56,7 @@ export class SkySystem {
   readonly uMoonDir = uniform(new THREE.Vector3(0, -1, 0));
   readonly uFogColor = uniform(new THREE.Color(0.6, 0.7, 0.8));
   readonly uFogSunColor = uniform(new THREE.Color(1, 0.8, 0.6));
-  readonly uFogDensity = uniform(0.00075);
+  readonly uFogDensity = uniform(0.00028);
   readonly uNight = uniform(0);
   readonly uTwilight = uniform(0);
   readonly uRotT = uniform(new THREE.Matrix3());
@@ -68,7 +68,7 @@ export class SkySystem {
   constructor(private scene: THREE.Scene, q: QualityPreset) {
     // Visible sky
     this.sky = new SkyMesh();
-    this.sky.scale.setScalar(4000);
+    this.sky.scale.setScalar(8000);
     this.sky.frustumCulled = false;
     this.sky.renderOrder = -10;
     this.configureSky(this.sky, true);
@@ -185,7 +185,7 @@ export class SkySystem {
       const night = milky.add(airglow).mul(above).mul(uNight).add(moon.mul(smoothstep(-0.03, 0.03, uMoon.y)).mul(above));
       return vec4(night.add(twGlow.mul(uTw)), 1.0);
     })();
-    const dome = new THREE.Mesh(new THREE.SphereGeometry(3500, 64, 32), mat);
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(7500, 64, 32), mat);
     dome.frustumCulled = false;
     dome.renderOrder = -5;
     dome.onBeforeRender = (_r, _s, cam) => dome.position.copy(cam.position);
@@ -195,7 +195,7 @@ export class SkySystem {
   /** Loads the star catalogue and adds the real night sky. */
   async loadStars() {
     try {
-      this.stars = await Starfield.load(this.uNight);
+      this.stars = await Starfield.load(this.uNight, 7200);
       this.scene.add(this.stars.mesh);
     } catch (e) {
       console.warn('Star catalogue unavailable', e);
