@@ -66,7 +66,14 @@ interface Variant {
   lods: { branches: THREE.InstancedMesh; leaves: THREE.InstancedMesh }[];
   impostor: Impostor | null;
   members: TreeInstance[];
+  // Trees currently assigned to the full / simplified meshes, with their matrices,
+  // so each frame we only copy the ones inside the view.
+  cand: { list: TreeInstance[]; mats: Float32Array }[];
 }
+
+const _pv = new THREE.Matrix4();
+const _frustum = new THREE.Frustum();
+const _sphere = new THREE.Sphere();
 
 const FRAMES = 8;           // impostor views around the tree
 const ATLAS_COLS = 4;
@@ -155,7 +162,7 @@ export class Trees {
         if (lod === 0) for (const t of members) t.trunkRadius = g.trunkRadius * t.scale;
         return { branches: b, leaves: l };
       });
-      this.variants.push({ kind, bush: !!sp.bush, baseH, full, lods, impostor: null, members });
+      this.variants.push({ kind, bush: !!sp.bush, baseH, full, lods, impostor: null, members, cand: [{ list: [], mats: new Float32Array(members.length * 16) }, { list: [], mats: new Float32Array(members.length * 16) }] });
     }
     this.group.name = 'Trees';
   }
@@ -366,8 +373,14 @@ export class Trees {
     return mat;
   }
 
-  update(cam: THREE.Vector3) {
-    if (this.lastUpdate.distanceToSquared(cam) < 64) return;
+  update(camera: THREE.PerspectiveCamera) {
+    const cam = camera.position;
+    if (this.lastUpdate.distanceToSquared(cam) >= 64) this.assign(cam);
+    this.cull(camera);
+  }
+
+  /** Decide each tree's level of detail (only when the player has moved a few metres). */
+  private assign(cam: THREE.Vector3) {
     this.lastUpdate.copy(cam);
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
@@ -378,8 +391,10 @@ export class Trees {
     const mid2 = this.midDistance ** 2;
     const bush2 = (this.midDistance * 0.6) ** 2;
     for (const v of this.variants) {
-      let c0 = 0, c1 = 0, c2 = 0;
+      let c2 = 0;
       const imp = v.impostor;
+      v.cand[0].list.length = 0;
+      v.cand[1].list.length = 0;
       for (const t of v.members) {
         const d2 = (t.x - cam.x) ** 2 + (t.z - cam.z) ** 2;
         let lod: number;
@@ -396,17 +411,45 @@ export class Trees {
         s.setScalar(t.scale);
         p.set(t.x, t.y, t.z);
         m.compose(p, q, s);
-        if (lod === 0) { v.lods[0].branches.setMatrixAt(c0, m); v.lods[0].leaves.setMatrixAt(c0, m); c0++; }
-        else { v.lods[1].branches.setMatrixAt(c1, m); v.lods[1].leaves.setMatrixAt(c1, m); c1++; }
+        const c = v.cand[lod];
+        m.toArray(c.mats, c.list.length * 16);
+        c.list.push(t);
       }
-      v.lods[0].branches.count = v.lods[0].leaves.count = c0;
-      v.lods[1].branches.count = v.lods[1].leaves.count = c1;
-      for (const l of v.lods) { l.branches.instanceMatrix.needsUpdate = true; l.leaves.instanceMatrix.needsUpdate = true; }
       if (imp) {
         imp.geo.instanceCount = c2;
         imp.inst.needsUpdate = true;
         imp.yaw.needsUpdate = true;
         imp.mesh.visible = c2 > 0;
+      }
+    }
+  }
+
+  /** Every frame: draw only the detailed trees that can be seen (or are close enough to shade the view). */
+  private cull(camera: THREE.PerspectiveCamera) {
+    _pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    _frustum.setFromProjectionMatrix(_pv);
+    const cam = camera.position;
+    for (const v of this.variants) {
+      for (let lod = 0; lod < 2; lod++) {
+        const c = v.cand[lod];
+        const b = v.lods[lod].branches, l = v.lods[lod].leaves;
+        const bArr = b.instanceMatrix.array as Float32Array;
+        const lArr = l.instanceMatrix.array as Float32Array;
+        let n = 0;
+        for (let i = 0; i < c.list.length; i++) {
+          const t = c.list[i];
+          const h = Math.max(t.height, 2.5);
+          _sphere.center.set(t.x, t.y + h * 0.5, t.z);
+          _sphere.radius = h * 0.75 + 4;
+          const near = (t.x - cam.x) ** 2 + (t.z - cam.z) ** 2 < 900;
+          if (!near && !_frustum.intersectsSphere(_sphere)) continue;
+          bArr.set(c.mats.subarray(i * 16, i * 16 + 16), n * 16);
+          lArr.set(c.mats.subarray(i * 16, i * 16 + 16), n * 16);
+          n++;
+        }
+        b.count = l.count = n;
+        b.instanceMatrix.needsUpdate = true;
+        l.instanceMatrix.needsUpdate = true;
       }
     }
   }

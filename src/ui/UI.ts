@@ -103,9 +103,11 @@ export class UI {
     const inv = $<HTMLInputElement>('s-invert');
     const bob = $<HTMLInputElement>('s-bob');
     const fps = $<HTMLInputElement>('s-fps');
+    const hands = $<HTMLInputElement>('s-hands');
+    const adaptive = $<HTMLInputElement>('s-adaptive');
     q.value = s.quality; fov.value = String(s.fov); sens.value = String(s.sensitivity);
     vol.value = String(s.volume); ts.value = String(s.timeScale); inv.checked = s.invertY;
-    bob.checked = s.headBob; fps.checked = s.showFps;
+    bob.checked = s.headBob; fps.checked = s.showFps; hands.checked = s.showHands; adaptive.checked = s.adaptiveResolution;
     this.refreshOutputs();
     const changed = (quality = false) => { this.refreshOutputs(); this.onSettingsChange?.(s, quality); };
     q.addEventListener('change', () => { s.quality = q.value as any; changed(true); });
@@ -116,6 +118,8 @@ export class UI {
     inv.addEventListener('change', () => { s.invertY = inv.checked; changed(); });
     bob.addEventListener('change', () => { s.headBob = bob.checked; changed(); });
     fps.addEventListener('change', () => { s.showFps = fps.checked; changed(); });
+    hands.addEventListener('change', () => { s.showHands = hands.checked; changed(); });
+    adaptive.addEventListener('change', () => { s.adaptiveResolution = adaptive.checked; changed(); });
     hour.addEventListener('input', () => { this.onHourChange?.(+hour.value); this.refreshOutputs(); });
   }
 

@@ -6,7 +6,7 @@ import { Physics } from '../physics/Physics';
 import { Input } from '../core/Input';
 import { Heightfield } from '../world/Heightfield';
 import { WATER_LEVEL, WORLD_HALF } from '../world/WorldConfig';
-import type { UserSettings } from '../core/Settings';
+import { verticalFov, type UserSettings } from '../core/Settings';
 
 export type Surface = 'grass' | 'rock' | 'mud' | 'water';
 
@@ -30,12 +30,14 @@ export class Player {
   private collider: RAPIER.Collider;
   private controller: RAPIER.KinematicCharacterController;
   private vel = new THREE.Vector3();
-  private grounded = false;
+  grounded = false;
   private eye = STAND_EYE;
-  private bobPhase = 0;
-  private bobAmp = 0;
+  bobPhase = 0;
+  bobAmp = 0;
+  sprinting = false;
+  crouching = false;
   private lastStep = 0;
-  private landDip = 0;
+  landDip = 0;
   private landVel = 0;
   private roll = 0;
   private fovKick = 0;
@@ -84,6 +86,8 @@ export class Player {
     const r = (input.down('KeyD') || input.down('ArrowRight') ? 1 : 0) - (input.down('KeyA') || input.down('ArrowLeft') ? 1 : 0);
     const crouch = input.down('KeyC') || input.down('ControlLeft');
     const sprint = (input.down('ShiftLeft') || input.down('ShiftRight')) && f > 0 && !crouch;
+    this.sprinting = sprint;
+    this.crouching = crouch;
     const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
     let wx = -sin * f + cos * r;
     let wz = -cos * f - sin * r;
@@ -195,8 +199,8 @@ export class Player {
     this.roll += (-r * 0.012 * (this.grounded ? 1 : 0.4) - this.roll) * (1 - Math.exp(-6 * dt));
     cam.rotation.set(this.pitch + Math.sin(this.bobPhase * 2) * this.bobAmp * 0.06 * bobOn, this.yaw, this.roll, 'YXZ');
 
-    const fovTarget = s.fov + (sprint && actualH > 4 ? 7 : 0);
-    this.fovKick += (fovTarget - this.fovKick - 0) * (1 - Math.exp(-5 * dt));
+    const fovTarget = verticalFov(s.fov + (sprint && actualH > 4 ? 6 : 0), cam.aspect);
+    this.fovKick += (fovTarget - this.fovKick) * (1 - Math.exp(-5 * dt));
     if (Math.abs(cam.fov - this.fovKick) > 0.01) { cam.fov = this.fovKick; cam.updateProjectionMatrix(); }
     return events;
   }

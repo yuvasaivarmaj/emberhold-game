@@ -9,11 +9,12 @@ import { Rocks } from '../world/Rocks';
 import { Water } from '../world/Water';
 import { Physics } from '../physics/Physics';
 import { Player } from '../player/Player';
+import { Viewmodel } from '../player/Viewmodel';
 import { GameAudio } from '../audio/Audio';
 import { Pipeline } from '../render/Pipeline';
 import { Input } from './Input';
 import { UI } from '../ui/UI';
-import { PRESETS, loadSettings, saveSettings, type UserSettings, type QualityPreset } from './Settings';
+import { PRESETS, loadSettings, saveSettings, verticalFov, type UserSettings, type QualityPreset } from './Settings';
 import { SPAWN, riverDistance } from '../world/WorldConfig';
 
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
@@ -35,6 +36,7 @@ export class Game {
   water!: Water;
   physics = new Physics();
   player!: Player;
+  hands!: Viewmodel;
   audio = new GameAudio();
   pipeline!: Pipeline;
   state: 'loading' | 'title' | 'playing' | 'paused' = 'loading';
@@ -42,6 +44,10 @@ export class Game {
   private fpsFrames = 0;
   private fpsTime = 0;
   private titleT = 0;
+  private baseDpr = 1;
+  private resScale = 1;
+  private perfTime = 0;
+  private perfFrames = 0;
   private params = new URLSearchParams(location.search);
 
   constructor() {
@@ -49,7 +55,8 @@ export class Game {
     const qp = this.params.get('quality');
     if (qp && qp in PRESETS) this.settings.quality = qp as any;
     this.q = PRESETS[this.settings.quality];
-    this.camera = new THREE.PerspectiveCamera(this.settings.fov, innerWidth / innerHeight, 0.08, 6000);
+    this.camera = new THREE.PerspectiveCamera(verticalFov(this.settings.fov, innerWidth / innerHeight), innerWidth / innerHeight, 0.05, 6000);
+    this.scene.add(this.camera);
     this.ui = new UI(this.settings);
   }
 
@@ -62,8 +69,8 @@ export class Game {
         powerPreference: 'high-performance',
         forceWebGL: this.params.has('webgl'),
       });
-      const dpr = Math.min(devicePixelRatio, this.q.pixelRatio) * this.q.renderScale;
-      this.renderer.setPixelRatio(dpr);
+      this.baseDpr = Math.min(devicePixelRatio, this.q.pixelRatio) * this.q.renderScale;
+      this.renderer.setPixelRatio(this.baseDpr);
       this.renderer.setSize(innerWidth, innerHeight);
       this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
       this.renderer.shadowMap.enabled = this.q.shadows;
@@ -111,6 +118,8 @@ export class Game {
       this.physics.addTrees(this.trees.instances);
       this.physics.addRocks(this.rocks.instances, this.rocks.geometries);
       this.player = new Player(this.physics, this.hf, SPAWN, this.camera);
+      this.hands = new Viewmodel(this.camera);
+      this.hands.visible = this.settings.showHands;
       this.restorePose();
       this.physics.step();
       const pos = this.params.get('pos');
@@ -119,6 +128,7 @@ export class Game {
         this.player.setPose(x, this.hf.height(x, z) + 0.05, z, +(this.params.get('yaw') ?? SPAWN.yaw), +(this.params.get('pitch') ?? 0));
       }
       this.player.update(0.016, this.input, this.settings);
+      this.hands.update(0.016, this.player, 0, 0);
       this.updateWorld(0.016, true);
 
       this.pipeline = new Pipeline(this.renderer, this.scene, this.camera, this.q);
@@ -253,6 +263,7 @@ export class Game {
 
   private resize() {
     this.camera.aspect = innerWidth / innerHeight;
+    this.camera.fov = verticalFov(this.settings.fov, this.camera.aspect);
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(innerWidth, innerHeight);
   }
@@ -260,8 +271,9 @@ export class Game {
   private updateWorld(dt: number, _force = false) {
     const cam = this.camera.position;
     this.terrain.update(cam);
-    this.grass.update(cam);
-    this.trees.update(cam);
+    this.grass.update(this.camera);
+    this.camera.updateMatrixWorld();
+    this.trees.update(this.camera);
     this.sky.update(dt, this.renderer, cam);
   }
 
@@ -280,6 +292,8 @@ export class Game {
       const fast = input.down('KeyT');
       this.sky.timeScale = fast ? 90 : this.settings.timeScale;
       const ev = this.player.update(dt, input, this.settings);
+      this.hands.visible = this.settings.showHands;
+      this.hands.update(dt, this.player, input.mouseDX, input.mouseDY);
       this.physics.step();
       if (ev.footstep) this.audio.footstep(ev.footstep.surface, ev.footstep.intensity);
       if (ev.landed) this.audio.landed(ev.landed, this.player.surface);
@@ -304,15 +318,34 @@ export class Game {
     this.pipeline.render();
     input.endFrame();
 
+    this.adaptResolution(dt);
     this.fpsFrames++;
     this.fpsTime += dt;
     if (this.fpsTime > 0.5) {
       if (this.settings.showFps) {
         const info = this.renderer.info.render;
         const p = this.player.feet;
-        this.ui.fps(`${Math.round(this.fpsFrames / this.fpsTime)} fps\n${(info.triangles / 1e6).toFixed(2)}M tris · ${info.drawCalls} draws\n${p.x.toFixed(0)}, ${p.y.toFixed(1)}, ${p.z.toFixed(0)}`);
+        this.ui.fps(`${Math.round(this.fpsFrames / this.fpsTime)} fps · ${Math.round(this.resScale * 100)}% res\n${(info.triangles / 1e6).toFixed(2)}M tris · ${info.drawCalls} draws\n${p.x.toFixed(0)}, ${p.y.toFixed(1)}, ${p.z.toFixed(0)}`);
       } else this.ui.fps(null);
       this.fpsFrames = 0; this.fpsTime = 0;
+    }
+  }
+
+  /** Lower the internal resolution a little when the frame rate drops, raise it back when there's headroom. */
+  private adaptResolution(dt: number) {
+    if (this.state !== 'playing') return;
+    this.perfFrames++;
+    this.perfTime += dt;
+    if (this.perfTime < 1.5) return;
+    const fps = this.perfFrames / this.perfTime;
+    this.perfFrames = 0; this.perfTime = 0;
+    let next = this.resScale;
+    if (!this.settings.adaptiveResolution) next = 1;
+    else if (fps < 50) next = Math.max(0.6, this.resScale - 0.08);
+    else if (fps > 68) next = Math.min(1, this.resScale + 0.05);
+    if (Math.abs(next - this.resScale) > 0.001) {
+      this.resScale = next;
+      this.renderer.setPixelRatio(this.baseDpr * next);
     }
   }
 

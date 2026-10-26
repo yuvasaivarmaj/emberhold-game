@@ -13,6 +13,8 @@ import { grassCoverage, meadowColor, PAL } from './TerrainShading';
 import type { GrassLayerSpec } from '../core/Settings';
 import type { SkySystem } from './SkySystem';
 
+const _dir = new THREE.Vector3();
+
 function bladeGeometry(segments: number): THREE.InstancedBufferGeometry {
   const pos: number[] = [];
   const idx: number[] = [];
@@ -37,13 +39,19 @@ function bladeGeometry(segments: number): THREE.InstancedBufferGeometry {
 export class GrassLayer {
   readonly mesh: THREE.Mesh;
   private uOrigin = uniform(new THREE.Vector2());
+  // Width (in cells) of the rectangle actually drawn this frame: only the part
+  // of the patch that can be in view is generated.
+  private uRowW = uniform(1, 'uint');
   private gridW: number;
+  private geo: THREE.InstancedBufferGeometry;
 
   constructor(private spec: GrassLayerSpec, hf: Heightfield, sky: SkySystem, innerFade: number | null) {
     const W = Math.ceil((spec.radius * 2) / spec.spacing);
     this.gridW = W;
     const geo = bladeGeometry(spec.segments);
     geo.instanceCount = W * W;
+    this.geo = geo;
+    this.uRowW.value = W;
     // Rough bounds so the renderer never culls the patch.
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
 
@@ -58,8 +66,8 @@ export class GrassLayer {
 
     // --- per-blade attributes (computed once per vertex; cheap enough) ---
     const id = instanceIndex;
-    const gx = float(id.mod(uint(W)));
-    const gz = float(id.div(uint(W)));
+    const gx = float(id.mod(this.uRowW));
+    const gz = float(id.div(this.uRowW));
     const cell = uOrigin.add(vec2(gx, gz));
     const seed = uint(cell.x.add(65536.0)).mul(uint(73856093)).bitXor(uint(cell.y.add(65536.0)).mul(uint(19349663)));
     const r1 = hash(seed);
@@ -90,7 +98,7 @@ export class GrassLayer {
     if (innerR) fade = fade.mul(smoothstep(innerR.mul(0.75), innerR, camDist));
     const present = smoothstep(r4.sub(0.08), r4.add(0.08), cover);
     const tall = mx_noise_float(xz.mul(0.045)).mul(0.5).add(0.5);
-    const bladeH = float(spec.height).mul(mix(0.32, 0.85, tall)).mul(r3.mul(0.7).add(0.65))
+    const bladeH = float(spec.height).mul(mix(0.2, 0.55, tall)).mul(r3.mul(0.55).add(0.7))
       .mul(present).mul(fade).mul(cover.sqrt().mul(0.6).add(0.4));
     const bladeW = float(spec.width).mul(r1.mul(0.6).add(0.7)).mul(present.mul(fade).sqrt());
 
@@ -143,9 +151,36 @@ export class GrassLayer {
     this.mesh.name = 'Grass';
   }
 
-  update(cam: THREE.Vector3) {
+  update(camera: THREE.PerspectiveCamera) {
     const s = this.spec.spacing;
-    this.uOrigin.value.set(Math.floor(cam.x / s) - this.gridW / 2, Math.floor(cam.z / s) - this.gridW / 2);
+    const cam = camera.position;
+    const R = this.spec.radius;
+    // Bounding box of the view wedge on the ground, plus a margin around the feet.
+    camera.getWorldDirection(_dir);
+    let fx = _dir.x, fz = _dir.z;
+    const fl = Math.hypot(fx, fz);
+    let minX = cam.x - 4, maxX = cam.x + 4, minZ = cam.z - 4, maxZ = cam.z + 4;
+    if (fl > 0.2) {
+      fx /= fl; fz /= fl;
+      const hfov = Math.atan(Math.tan((camera.fov * Math.PI) / 360) * camera.aspect) + 0.25;
+      for (const a of [-hfov, -hfov / 2, 0, hfov / 2, hfov]) {
+        const c = Math.cos(a), sn = Math.sin(a);
+        const px = cam.x + (fx * c - fz * sn) * R, pz = cam.z + (fx * sn + fz * c) * R;
+        minX = Math.min(minX, px); maxX = Math.max(maxX, px);
+        minZ = Math.min(minZ, pz); maxZ = Math.max(maxZ, pz);
+      }
+    } else {
+      // Looking straight up or down: draw the whole patch.
+      minX = cam.x - R; maxX = cam.x + R; minZ = cam.z - R; maxZ = cam.z + R;
+    }
+    minX = Math.max(minX, cam.x - R); maxX = Math.min(maxX, cam.x + R);
+    minZ = Math.max(minZ, cam.z - R); maxZ = Math.min(maxZ, cam.z + R);
+    const x0 = Math.floor(minX / s), z0 = Math.floor(minZ / s);
+    const w = Math.max(1, Math.min(this.gridW, Math.ceil(maxX / s) - x0 + 1));
+    const h = Math.max(1, Math.min(this.gridW, Math.ceil(maxZ / s) - z0 + 1));
+    this.uOrigin.value.set(x0, z0);
+    this.uRowW.value = w;
+    this.geo.instanceCount = w * h;
   }
 }
 
@@ -164,5 +199,5 @@ export class Grass {
     }
   }
 
-  update(cam: THREE.Vector3) { for (const l of this.layers) l.update(cam); }
+  update(camera: THREE.PerspectiveCamera) { for (const l of this.layers) l.update(camera); }
 }

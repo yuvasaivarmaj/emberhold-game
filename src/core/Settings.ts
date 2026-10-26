@@ -64,7 +64,9 @@ export const PRESETS: Record<QualityLevel | 'test', QualityPreset> = {
 
 export interface UserSettings {
   quality: QualityLevel;
-  fov: number;
+  fov: number;            // horizontal field of view, degrees
+  showHands: boolean;
+  adaptiveResolution: boolean;
   sensitivity: number;
   invertY: boolean;
   volume: number;
@@ -73,7 +75,8 @@ export interface UserSettings {
   timeScale: number;
 }
 
-const KEY = 'emberhold.settings.v1';
+const KEY = 'emberhold.settings.v2';
+const OLD_KEY = 'emberhold.settings.v1';
 
 export function guessQuality(): QualityLevel {
   const mem = (navigator as any).deviceMemory ?? 8;
@@ -86,14 +89,23 @@ export function guessQuality(): QualityLevel {
 
 export function loadSettings(): UserSettings {
   const defaults: UserSettings = {
-    quality: guessQuality(), fov: 72, sensitivity: 1, invertY: false, volume: 0.8,
+    quality: guessQuality(), fov: 90, showHands: true, adaptiveResolution: true, sensitivity: 1, invertY: false, volume: 0.8,
     headBob: true, showFps: false, timeScale: 1,
   };
   try {
     const raw = localStorage.getItem(KEY);
     if (raw) return { ...defaults, ...JSON.parse(raw) };
+    // Older saves stored a vertical field of view; keep everything else.
+    const old = localStorage.getItem(OLD_KEY);
+    if (old) { const o = JSON.parse(old); delete o.fov; return { ...defaults, ...o }; }
   } catch { /* storage unavailable */ }
   return defaults;
+}
+
+/** Convert a horizontal field of view to the vertical one the camera uses. */
+export function verticalFov(hFovDeg: number, aspect: number) {
+  const h = (hFovDeg * Math.PI) / 180;
+  return (2 * Math.atan(Math.tan(h / 2) / aspect) * 180) / Math.PI;
 }
 
 export function saveSettings(s: UserSettings) {
