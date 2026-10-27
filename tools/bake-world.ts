@@ -215,6 +215,16 @@ for (const r of roads) {
     }
     prof = s;
   }
+  // Roads that start at Emberhold's gates begin at the level of the yard inside and
+  // climb to it as an even ramp, instead of ending at the foot of the hill's scarp.
+  if (r.name === 'South road' || r.name === 'North road') {
+    const gateH = fortHeight(E.outerR - 4)!;
+    const K = 34; // ~136 m of ramp
+    for (let i = 0; i < Math.min(K, prof.length); i++) {
+      const t = i / K;
+      prof[i] = lerp(gateH, prof[i], t * t * (3 - 2 * t));
+    }
+  }
   // Bridges: wherever the road crosses a river, carry it level across.
   let inWater = -1;
   for (let i = 0; i < pts.length; i++) {

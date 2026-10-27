@@ -89,6 +89,17 @@ export class UI {
     setTimeout(() => t.classList.remove('show'), ms);
   }
 
+  private ringV = -1;
+  /** A thin ring around the crosshair that fills while you hold an action. */
+  progressRing(v: number) {
+    const q = Math.round(v * 50) / 50;
+    if (q === this.ringV) return;
+    this.ringV = q;
+    const el = $('ring');
+    el.style.opacity = q > 0 ? '1' : '0';
+    el.style.background = `conic-gradient(rgba(244,162,94,0.95) ${q * 360}deg, rgba(236,228,214,0.18) 0deg)`;
+  }
+
   private promptText = '';
   prompt(html: string | null) {
     const el = $('prompt');

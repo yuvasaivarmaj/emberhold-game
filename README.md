@@ -18,16 +18,20 @@ Works best in a recent Chrome or Edge, which use WebGPU. Other browsers fall bac
 | W A S D / arrows | Move |
 | Mouse | Look |
 | Shift | Run (on horseback: canter, then gallop) |
-| Space | Jump |
+| Space | Jump; at a ledge, climb it |
 | C or Ctrl | Crouch (on horseback: keep to a walk) |
 | E | Mount or dismount a horse |
+| F | Break off a branch; hold to light it |
+| C + F (hold) | Grind a lit torch into the earth |
+| Q | Drop the branch |
+| M | Map |
 | Hold T | Let time pass quickly |
 | F3 | Frame rate and position |
 | Esc | Menu and settings |
 
 ## What's built so far
 
-- **Opening film:** a narrated, subtitled cinematic (Aethryn, the departure, the crossing, the fall out of Scorpius, the wreck at dawn). Hold Space to skip.
+- **Opening film:** told in hand-drawn ink-and-wash panels, narrated and subtitled. It covers Aethryn and its fire-hounds, the smiths and their blood-bound ore, the Doom, the flight of the houses, the dark that took them, the one ship that fell out of Scorpius, the first forge, and the other ship that drifted in centuries late. Hold Space to skip.
 - **The Verdance:** an 8 × 8 km baked map with the Silverrun, Quill Brook and Ember Brook, roads, stone bridges, farm parcels of wheat, barley and flax, vineyards, horse pastures, the charcoal woods, oak forest, a lake, high mountains to the north and west, and the outer watchstones on the south road.
 - **Emberhold:** three ring walls of pale stone banded with dark fused brick, with towers and gatehouses. The great blackwood gates open on the lower yard, a town of smithies, stables, granary towers, barracks and houses. Above it are the middle courts with the halls of the sworn households and the rookery tower. On the summit stand the Hall of Cinders, the keep, the family and nursery wings, the forge hall with its smoking stack, and the vault stair. Windows light up after dark.
 - **Quillhaven:** the leaning square tower of House Quillayne with its three additions and two weak walls, the rookery larger than the chapel, the chapel's crooked bell, the market green with its stalls and well, the Green Perch (with its sign), the counting hall, the granary on staddle stones, the scribe-house, saddle-house and west store, the mill with its turning wheel on the Quill Brook, the north bridge and its bell, rooks wheeling over the old elms, and the old banyan with its hanging roots outside the village.
@@ -35,7 +39,10 @@ Works best in a recent Chrome or Edge, which use WebGPU. Other browsers fall bac
 - **Night sky:** 8,700 real stars from the Yale Bright Star Catalogue, turning with sidereal time, plus the Milky Way, a phased moon and Scorpius picked out.
 - **Lighting:** cascaded sun and moon shadows, image-based light from the sky, bloom and filmic tone mapping.
 - **Grass, trees, rocks and water:** GPU grass that follows the fields and crops, about a dozen tree species with three levels of detail, boulders, and refracting rivers.
-- **You:** a first-person body at a person's eye height, with visible hands and arms that sway, swing and react to running, swimming and turning.
+- **You:** a first-person body at a person's eye height, with real jointed hands. The arms swing with each step, pump when you run, lift as you jump, hold the reins on horseback and swim a breaststroke. Walking and running have weight, the head bobs with each footfall, and footsteps sound different on grass, gravel, flagstones, rock, mud and water.
+- **Climbing:** jump at a ledge up to about 2.4 m (low walls, rocks, parapets) to pull yourself up and over.
+- **Torches:** snap a branch off a tree, strike your tinderbox to light it, and carry it through the dark, on horseback too. Put it out by plunging it into water or grinding it into the earth. It burns down in about a quarter of an hour.
+- **Map and guidance:** an ink map of the Verdance drawn from the real terrain (M), a minimap that turns with you, places announced as you discover them, a things-to-do panel and a hint feed.
 - **Saving:** autosaves every 20 seconds and when you pause.
 - **Settings:** five quality presets, horizontal field of view, adaptive resolution, show hands, sensitivity, volume, time of day and day length.
 
@@ -65,6 +72,7 @@ The map is baked by `tools/bake-world.ts` into `public/data/` (run automatically
 - [three.js](https://threejs.org) (MIT): rendering.
 - [Rapier](https://rapier.rs) (Apache-2.0): physics.
 - [ez-tree](https://github.com/dgreenheck/ez-tree) (MIT) by Daniel Greenheck: procedural tree geometry. Its bark textures are CC0, from Poly Haven and TextureCan.
+- Hand models: the generic hands from [@webxr-input-profiles/assets](https://github.com/immersive-web/webxr-input-profiles) (MIT), posed in code.
 - Star positions: the Yale Bright Star Catalogue (5th ed.), via the JSON conversion by Bretton Wade (MIT).
 
 ## Roadmap

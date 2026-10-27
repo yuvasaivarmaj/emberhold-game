@@ -105,6 +105,7 @@ input[type=checkbox] { accent-color: var(--ember); width: 18px; height: 18px; }
 
 #cine { position: fixed; inset: 0; z-index: 8; pointer-events: none; }
 #flash { position: absolute; inset: 0; background: #fff; opacity: 0; }
+#sketch { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 #subtitle {
   position: absolute; left: 50%; bottom: 9vh; transform: translateX(-50%); width: min(880px, calc(100% - 48px)); margin: 0;
   text-align: center; font-family: var(--body); font-size: clamp(18px, 2.3vw, 26px); line-height: 1.4; color: #f3ecdf;
@@ -123,3 +124,32 @@ input[type=checkbox] { accent-color: var(--ember); width: 18px; height: 18px; }
 .prompt { position: absolute; top: 58%; left: 50%; transform: translateX(-50%); font-size: 15px; letter-spacing: 0.04em; color: #ece4d6; text-shadow: 0 1px 6px #000; opacity: 0; transition: opacity 0.25s; pointer-events: none; white-space: nowrap; }
 .prompt.on { opacity: 1; }
 .prompt kbd { margin-right: 6px; }
+
+/* Map, things to do, messages */
+.minimap { position: absolute; right: 22px; bottom: 22px; width: 184px; height: 184px; border-radius: 50%;
+  box-shadow: 0 0 0 3px rgba(58, 38, 24, 0.85), 0 0 0 5px rgba(236, 226, 198, 0.35), 0 6px 24px rgba(0,0,0,0.55); background: #e9dec0; }
+.todo { position: absolute; left: 22px; bottom: 22px; max-width: min(380px, 42vw); padding: 12px 16px 12px 14px;
+  background: linear-gradient(90deg, rgba(14,11,9,0.62), rgba(14,11,9,0.0)); border-left: 2px solid var(--ember);
+  color: var(--ink); text-shadow: 0 1px 4px rgba(0,0,0,0.7); font-size: 15px; line-height: 1.35; }
+.todo:empty { display: none; }
+.todo-title { font-family: var(--display); font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ember-hot); margin-bottom: 4px; }
+.todo-goal { font-style: italic; color: var(--ink); }
+.todo ul { list-style: none; margin: 8px 0 0; padding: 0; color: var(--ink-dim); font-size: 14px; }
+.todo li { margin: 3px 0; }
+.todo kbd, .messages kbd { font-size: 11px; }
+.messages { position: absolute; top: 44px; right: 22px; width: min(340px, 40vw); display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+.msg { background: rgba(14,11,9,0.7); border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; color: var(--ink);
+  font-size: 14px; line-height: 1.35; opacity: 0; transform: translateY(-6px); transition: opacity 0.6s, transform 0.6s; max-width: 100%; }
+.msg.show { opacity: 1; transform: none; }
+.msg .tip { font-family: var(--display); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ember-hot); margin-right: 6px; }
+.msg .found { font-family: var(--display); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: #d9c48a; display: block; }
+.msg .place { font-family: var(--display); font-size: 16px; letter-spacing: 0.08em; }
+.mapview { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(8,6,5,0.72);
+  opacity: 0; transition: opacity 0.25s; }
+.mapview.open { opacity: 1; }
+.mapview canvas { box-shadow: 0 12px 60px rgba(0,0,0,0.7); border-radius: 2px; }
+.map-hint { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); color: var(--ink-dim); font-size: 14px; }
+@media (max-width: 640px) { .minimap { width: 120px; height: 120px; } .todo { font-size: 13px; } }
+
+.ring { position: absolute; left: 50%; top: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; opacity: 0; transition: opacity 0.2s;
+  -webkit-mask: radial-gradient(circle, transparent 13px, #000 14px); mask: radial-gradient(circle, transparent 13px, #000 14px); }

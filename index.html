@@ -15,10 +15,15 @@
 
   <div id="hud" hidden>
     <div class="crosshair"></div>
+    <div id="ring" class="ring"></div>
     <div id="clock" class="clock"></div>
     <div id="fps" class="fps" hidden></div>
     <div id="toast" class="toast"></div>
     <div id="prompt" class="prompt"></div>
+    <div id="messages" class="messages"></div>
+    <div id="todo" class="todo"></div>
+    <canvas id="minimap" class="minimap" width="184" height="184"></canvas>
+    <div id="mapview" class="mapview"><canvas id="bigmap"></canvas><div class="map-hint"><kbd>M</kbd> close map</div></div>
     <div id="hint" class="hint">Hold <kbd>T</kbd> to let time pass · <kbd>Esc</kbd> menu</div>
   </div>
 
@@ -55,6 +60,8 @@
         <span><kbd>Space</kbd> jump</span>
         <span><kbd>C</kbd> crouch</span>
         <span><kbd>E</kbd> ride / dismount</span>
+        <span><kbd>F</kbd> branch / torch</span>
+        <span><kbd>M</kbd> map</span>
         <span><kbd>T</kbd> pass time</span>
         <span><kbd>Esc</kbd> menu</span>
       </div>
@@ -121,6 +128,7 @@
   </section>
 
   <section id="cine" hidden>
+    <canvas id="sketch"></canvas>
     <div id="flash"></div>
     <div id="cine-title"></div>
     <p id="subtitle"></p>

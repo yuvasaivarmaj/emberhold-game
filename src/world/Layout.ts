@@ -48,7 +48,7 @@ export const RIVERS: { name: string; width: number; pts: P[] }[] = [
   },
   {
     name: 'Ember Brook', width: 9,
-    pts: [[2300, -1500], [1900, -900], [1600, -420], [1200, -170], [880, -120], [600, -40], [380, 200]],
+    pts: [[2300, -1500], [2100, -950], [1980, -420], [1880, -60], [1760, 170]],
   },
 ];
 
@@ -123,3 +123,20 @@ export function distToPath(x: number, z: number, path: P[]) {
 export function fortShape(a: number) {
   return 1 + 0.05 * Math.sin(2 * a + 1.1) + 0.03 * Math.sin(3 * a + 0.4);
 }
+
+/** Named places: shown on the map and announced when you first come near. */
+export const PLACES: { name: string; x: number; z: number; r: number; label?: 'big' | 'small' | 'water'; sub?: string }[] = [
+  { name: 'Emberhold', x: EMBERHOLD.x, z: EMBERHOLD.z, r: 520, label: 'big', sub: 'Seat of House Vaelaros' },
+  { name: 'Quillhaven', x: QUILLHAVEN.x, z: QUILLHAVEN.z, r: 200, label: 'big', sub: 'Holdfast of House Quillayne' },
+  { name: 'The Silverrun', x: -300, z: 420, r: 0, label: 'water' },
+  { name: 'Quill Brook', x: -1560, z: 2900, r: 0, label: 'water' },
+  { name: 'Ember Brook', x: 2060, z: -700, r: 0, label: 'water' },
+  { name: 'The horse fields', x: 2450, z: -1100, r: 420, label: 'small', sub: 'Where the Maegyr families breed horses' },
+  { name: 'The vineyards', x: 1020, z: 1060, r: 380, label: 'small', sub: 'South of the Silverrun' },
+  { name: 'The charcoal woods', x: 1000, z: 440, r: 300, label: 'small' },
+  { name: 'The oak forest', x: -300, z: -900, r: 500, label: 'small' },
+  { name: 'The outer watchstones', x: 990, z: 300, r: 60, label: 'small', sub: 'Older than the house' },
+  { name: 'The old banyan', x: BANYAN.x, z: BANYAN.z, r: 70, label: 'small' },
+  { name: 'The lake', x: LAKE.x, z: LAKE.z, r: 420, label: 'water' },
+  { name: 'The iron hills', x: 450, z: -2750, r: 600, label: 'small' },
+];

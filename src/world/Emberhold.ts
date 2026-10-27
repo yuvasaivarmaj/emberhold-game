@@ -382,6 +382,10 @@ export class Emberhold {
     this.wallRing(E.outerR + 3, 13, 4.2, 74, 5.6, 20, [SOUTH, NORTH], true, 'outer');
     this.wallRing(E.middleR + 4, 11, 3.6, 62, 5.0, 17, [SOUTH, NORTH], false, 'middle');
     this.wallRing(E.keepR + 3, 10, 3.2, 52, 5.2, 22, [SOUTH], false, 'inner');
+    // Stone-faced slopes below each wall instead of bare earth, with walled ramps at the gates.
+    this.glacis(E.outerR + 3, 4.2, E.outerR + 26, [SOUTH, NORTH]);
+    this.glacis(E.middleR + 4, 3.6, E.middleR + 22, [SOUTH, NORTH]);
+    this.glacis(E.keepR + 3, 3.2, E.keepR + 22, [SOUTH]);
 
     this.lowerYard(rand, at);
     this.middleCourts(rand, at);
@@ -404,6 +408,51 @@ export class Emberhold {
   }
 
   private ground(x: number, z: number) { return this.hf.height(x, z); }
+
+  /**
+   * A battered stone revetment over the scarp below a wall, following the ground from
+   * under the wall's outer face to the foot of the slope. Gaps at the gates take the
+   * ramps, which get low parapet walls on both sides so nobody walks off the edge.
+   */
+  private glacis(rWall: number, thick: number, rEnd: number, gates: number[]) {
+    const b = this.b;
+    const ROWS = 8, GAP = 7.5;
+    const r0 = rWall + thick / 2 - 0.4, r1 = rEnd + 3;
+    const nCol = Math.ceil((Math.PI * 2 * rWall) / 3);
+    const pt = (a: number, r: number, lift: number) => {
+      const rr = r * fortShape(a);
+      const x = E.x + Math.cos(a) * rr, z = E.z + Math.sin(a) * rr;
+      return [x, this.ground(x, z) + lift, z];
+    };
+    const pos: number[] = [];
+    for (let c = 0; c < nCol; c++) {
+      const a0 = (c / nCol) * Math.PI * 2, a1 = ((c + 1) / nCol) * Math.PI * 2;
+      const am = (a0 + a1) / 2;
+      if (gates.some((g) => angDiff(am, g) * rWall * fortShape(g) < GAP)) continue;
+      for (let row = 0; row < ROWS; row++) {
+        const ra = r0 + (r1 - r0) * (row / ROWS), rb = r0 + (r1 - r0) * ((row + 1) / ROWS);
+        const la = row === 0 ? 0.6 : 0.18, lb = row === ROWS - 1 ? -0.6 : 0.18;
+        const p00 = pt(a0, ra, la), p10 = pt(a1, ra, la), p01 = pt(a0, rb, lb), p11 = pt(a1, rb, lb);
+        pos.push(...p00, ...p10, ...p01, ...p10, ...p11, ...p01);
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    b.add('stone', g);
+    // Parapets along the ramps through the gaps.
+    for (const gA of gates) {
+      const ux = Math.cos(gA), uz = Math.sin(gA), tx = -uz, tz = ux;
+      const sh = fortShape(gA);
+      for (const side of [-1, 1]) {
+        for (let r = r0 + 1; r < r1 + 10; r += 3) {
+          const cx = E.x + ux * r * sh + tx * side * GAP, cz = E.z + uz * r * sh + tz * side * GAP;
+          const y = this.ground(cx, cz);
+          b.box('stone', 0.7, 1.3, 3.2, cx, y - 0.3, cz, -Math.atan2(tz, tx));
+        }
+      }
+    }
+  }
 
   /** A ring of wall segments with towers, gaps for gates flanked by gatehouses. */
   private wallRing(r: number, height: number, thick: number, towerEvery: number, towerR: number, towerH: number,
@@ -557,7 +606,7 @@ export class Emberhold {
 
   private middleCourts(rand: () => number, at: (a: number, r: number) => THREE.Vector2) {
     const b = this.b;
-    // The halls of the sworn households: Vhassarin, Ashmantle, Qelbar, Marrowyn, Valros.
+    // The halls of the sworn households: Vhassarin, Ashmantle, Qelbar, Marrowyn, Halvane.
     const halls = [SOUTH + 0.55, SOUTH + 1.6, SOUTH + 2.7, SOUTH - 0.6, SOUTH - 1.7, SOUTH - 2.75];
     halls.forEach((a, i) => {
       const r = (E.keepR + E.middleR) / 2 + 12;

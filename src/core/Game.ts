@@ -11,6 +11,8 @@ import { Emberhold } from '../world/Emberhold';
 import { Structures } from '../world/Structures';
 import { Quillhaven, quillhavenPlantings } from '../world/Quillhaven';
 import { Horses } from '../world/Horses';
+import { Hud } from '../ui/Hud';
+import { Torch } from '../player/Torch';
 import { updateCamAxes } from '../cinematic/Effects';
 import { Physics } from '../physics/Physics';
 import { Player } from '../player/Player';
@@ -45,6 +47,11 @@ export class Game {
   structures!: Structures;
   quillhaven!: Quillhaven;
   horses!: Horses;
+  hud!: Hud;
+  torch!: Torch;
+  private reachT = 0;
+  private strikeT = 0;
+  private hudTimer = 0;
   private grips = [new THREE.Vector3(), new THREE.Vector3()];
   private eye = new THREE.Vector3();
   water!: Water;
@@ -150,9 +157,16 @@ export class Game {
       this.physics.addStatic(this.structures.colliders);
       this.physics.addStatic(this.quillhaven.colliders);
       this.player = new Player(this.physics, this.hf, SPAWN, this.camera);
+      this.hud = new Hud(this.hf);
+      this.hud.onDiscover = (name, sub) => this.hud.message(`<span class="found">Discovered</span><span class="place">${name}</span>${sub ? `<br><i>${sub}</i>` : ''}`, 10000);
       this.horses = new Horses(this.hf, this.physics);
       this.scene.add(this.horses.group);
       this.hands = new Viewmodel(this.camera);
+      await this.hands.load();
+      this.torch = new Torch(this.scene);
+      this.torch.attach(this.hands.rightGrip);
+      this.torch.onBurnOut = () => this.hud.message('The torch has burned down to a stub.', 5000);
+      this.extraActions = () => this.torchActions();
       this.hands.visible = this.settings.showHands;
       this.restorePose();
       this.physics.stream(this.player.feet, true);
@@ -208,6 +222,8 @@ export class Game {
           h.speed = +(this.params.get('mount') || 0);
           h.phase = +(this.params.get('phase') ?? 0.3);
         }
+        if (this.params.has('map')) this.hud.toggleMap(true);
+        if (this.params.has('torch')) { this.torch.state = this.params.get('torch') === 'lit' ? 'lit' : 'branch'; this.torch['uFlame'].value = this.torch.state === 'lit' ? 1 : 0; }
         for (let i = 0; i < +(this.params.get('still') || 3); i++) { this.frame(); await nextFrame(); }
         (this as any).stillDone = true;
         return;
@@ -325,6 +341,104 @@ export class Game {
       this.enter(true);
     });
   }
+
+  /** The map, the things-to-do panel and hints, refreshed as you play. */
+  private guide(dt: number) {
+    const p = this.player, h = this.horses;
+    this.hud.update(p.feet.x, p.feet.z, p.yaw, { horses: h.list.map((x) => ({ x: x.x, z: x.z })) });
+    this.hudTimer += dt;
+    if (this.hudTimer < 0.25) return;
+    this.hudTimer = 0;
+    const ch = chapterById(this.chapter);
+    const can: string[] = [];
+    if (h.mounted) {
+      can.push('<kbd>W</kbd> trot · <kbd>Shift</kbd> canter, gallop · <kbd>Ctrl</kbd> walk');
+      can.push('<kbd>A</kbd> <kbd>D</kbd> turn · <kbd>S</kbd> rein in · <kbd>E</kbd> dismount when slow');
+    } else {
+      const look = new THREE.Vector3(-Math.sin(p.yaw), 0, -Math.cos(p.yaw));
+      if (h.nearest(p.feet, look)) can.push('<kbd>E</kbd> ride this horse');
+      if (p.swimming) can.push('<kbd>W</kbd> swim · <kbd>Shift</kbd> stronger strokes');
+    }
+    for (const a of this.extraActions()) can.push(a);
+    can.push('<kbd>M</kbd> map');
+    this.hud.objectives(ch.title, ch.objective, can);
+    // One-time hints, when they become useful.
+    if (this.playSeconds > 2) this.hud.tip('move', 'Walk with <kbd>W A S D</kbd>, run with <kbd>Shift</kbd>, jump with <kbd>Space</kbd>. Jump at a ledge to climb it.');
+    if (this.playSeconds > 25) this.hud.tip('map', 'Press <kbd>M</kbd> for the map of the Verdance. The circle at the bottom right turns with you.');
+    if (!h.mounted && h.list.some((x) => Math.hypot(x.x - p.feet.x, x.z - p.feet.z) < 12)) this.hud.tip('horse', 'Walk up to a horse and press <kbd>E</kbd> to ride. Ashfoot, your own horse, waits by the south road.');
+    if (p.swimming) this.hud.tip('swim', 'You are swimming. Horses won\'t go into deep water.');
+    const hr = this.sky.hour;
+    if ((hr > 18.4 || hr < 5.5)) this.hud.tip('dark', 'Night is coming. Stand by a tree and press <kbd>F</kbd> to break off a branch, then <kbd>F</kbd> again to light it as a torch.');
+  }
+
+  /** A dry branch off a nearby tree, if there is one within reach. */
+  private treeInReach() {
+    const f = this.player.feet;
+    for (const t of this.trees.near(f.x, f.z, 4)) {
+      if (t.kind.startsWith('bush') || t.height < 4) continue;
+      const d = Math.hypot(t.x - f.x, t.z - f.z);
+      if (d < Math.max(0.4, t.trunkRadius) + 2.4) return t;
+    }
+    return null;
+  }
+
+  private torchActions() {
+    const t = this.torch, out: string[] = [];
+    const tree = this.treeInReach();
+    if (!t.held && tree) out.push('<kbd>F</kbd> break off a branch');
+    if (t.state === 'branch' || (t.state === 'charred' && t.fuel > 0.03)) out.push('Hold <kbd>F</kbd> strike the tinderbox to light it');
+    if (t.state === 'charred' && t.fuel <= 0.03 && tree) out.push('<kbd>F</kbd> break off a fresh branch');
+    if (t.state === 'lit') out.push(this.horses.mounted ? 'Ride into water to put the torch out' : 'Hold <kbd>C</kbd> + <kbd>F</kbd> grind it into the earth, or plunge it in water');
+    if (t.held) out.push('<kbd>Q</kbd> drop the branch');
+    return out;
+  }
+
+  /** Branch, tinderbox, flame, water and earth. */
+  private torchControl(dt: number) {
+    const t = this.torch, input = this.input, a = this.audio;
+    // Reaching up to snap a branch.
+    if (this.reachT > 0) {
+      this.reachT -= dt;
+      this.hands.reach = Math.min(1, Math.sin(Math.max(0, this.reachT) / 0.7 * Math.PI) * 1.4);
+      if (this.reachT <= 0.3 && t.state !== 'branch' && this.reachT + dt > 0.3) {
+        t.state = 'branch'; t.fuel = 1;
+        a.crack();
+        this.hud.message('You snap a dry branch off the tree.', 5000);
+      }
+      if (this.reachT <= 0) this.hands.reach = 0;
+    } else if (input.hit('KeyF')) {
+      const tree = this.treeInReach();
+      if ((!t.held || (t.state === 'charred' && t.fuel <= 0.03)) && tree && !this.horses.mounted) this.reachT = 0.7;
+      else if (!t.held && !tree) this.hud.message('There is no tree within reach.', 3000);
+    }
+    if (input.hit('KeyQ') && t.held) {
+      t.state = 'none';
+      this.hud.message(t.uFlameOn ? 'You throw the torch down.' : 'You drop the branch.', 3000);
+    }
+    const holdF = input.down('KeyF');
+    const crouch = input.down('KeyC') || input.down('ControlLeft');
+    if ((t.state === 'branch' || (t.state === 'charred' && t.fuel > 0.03)) && holdF && this.reachT <= 0) {
+      t.progress += dt / 1.8;
+      this.strikeT -= dt;
+      if (this.strikeT <= 0) { a.strike(); this.strikeT = 0.28 + Math.random() * 0.15; }
+      if (t.progress >= 1) { t.state = 'lit'; t.progress = 0; a.ignite(); this.hud.message('The branch catches. The torch is lit.', 4000); }
+    } else if (t.state === 'lit' && holdF && crouch && !this.horses.mounted && this.player.grounded) {
+      t.progress += dt / 2.2;
+      if (t.progress >= 1) { t.state = 'charred'; t.progress = 0; a.hiss(false); this.hud.message('You grind the burning end into the earth until it dies.', 5000); }
+    } else t.progress = Math.max(0, t.progress - dt * 2);
+    this.hands.holding = t.held ? 'torch' : 'none';
+    t.update(dt);
+    // Water puts it out.
+    if (t.state === 'lit' && (t.tip.y < WATER_LEVEL + 0.02 || this.player.swimming)) {
+      t.state = 'charred'; a.hiss(true);
+      this.hud.message('The torch hisses out in the water.', 4000);
+    }
+    a.setFire(t.state === 'lit' ? Math.min(1, 0.4 + t.fuel) : 0);
+    this.ui.progressRing(t.progress);
+  }
+
+  /** Extra contextual actions (torch, climbing) contributed by other systems. */
+  extraActions: () => string[] = () => [];
 
   private mountHorse(h: import('../world/Horses').Horse) {
     this.player.setActive(false);
@@ -472,6 +586,7 @@ export class Game {
         }
       } else {
         const ev = this.player.update(dt, input, this.settings);
+        this.hands.reach = Math.max(this.hands.reach * (this.reachT > 0 ? 1 : 0), this.player.climbReach);
         if (ev.footstep) this.audio.footstep(ev.footstep.surface, ev.footstep.intensity);
         if (ev.landed) this.audio.landed(ev.landed, this.player.surface);
         const look = new THREE.Vector3(-Math.sin(this.player.yaw), 0, -Math.cos(this.player.yaw));
@@ -479,10 +594,17 @@ export class Game {
         this.ui.prompt(near ? `<kbd>E</kbd> Ride${near.name === 'Ashfoot' ? ' Ashfoot' : ''}` : null);
         if (near && input.hit('KeyE')) this.mountHorse(near);
       }
+      if (input.hit('KeyM')) this.hud.toggleMap();
+      this.torchControl(dt);
+      this.guide(dt);
       this.physics.stream(this.player.feet);
       this.hands.visible = this.settings.showHands;
       this.hands.update(dt, this.player, input.mouseDX, input.mouseDY);
-      if (horses.mounted) horses.updateReins(this.hands.grips(this.grips));
+      if (horses.mounted) {
+        this.hands.grips(this.grips);
+        if (this.torch.held) this.grips[0].copy(this.grips[1]); // both reins in the left hand
+        horses.updateReins(this.grips);
+      }
       this.physics.step();
       this.updateWorld(dt);
       const f = this.player.feet;

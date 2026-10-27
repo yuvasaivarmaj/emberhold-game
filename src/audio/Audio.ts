@@ -162,37 +162,101 @@ export class GameAudio {
     }
   }
 
+  private stepSide = 1;
+
+  /**
+   * One footstep: the heel strikes, the weight rolls through, the toe pushes off. Each
+   * surface has its own texture built from short grains of filtered noise, and every
+   * step varies a little in timing, pitch and weight.
+   */
   footstep(surface: Surface, intensity: number) {
     const ctx = this.ctx;
     if (!ctx || ctx.state !== 'running') return;
-    const t = ctx.currentTime;
-    const src = ctx.createBufferSource();
-    src.buffer = this.white;
-    src.playbackRate.value = 0.8 + Math.random() * 0.4;
-    const f = ctx.createBiquadFilter();
-    const g = ctx.createGain();
-    const p = ctx.createStereoPanner(); p.pan.value = (Math.random() - 0.5) * 0.2;
-    let dur = 0.12, peak = 0.22 * intensity;
-    if (surface === 'grass') { f.type = 'bandpass'; f.frequency.value = 2600 + Math.random() * 1500; f.Q.value = 0.7; dur = 0.16; peak *= 0.6; }
-    else if (surface === 'rock') { f.type = 'bandpass'; f.frequency.value = 1500 + Math.random() * 600; f.Q.value = 1.4; dur = 0.07; peak *= 0.9; }
-    else if (surface === 'mud') { f.type = 'lowpass'; f.frequency.value = 700 + Math.random() * 300; dur = 0.15; peak *= 1.1; }
-    else { f.type = 'lowpass'; f.frequency.value = 1300 + Math.random() * 600; dur = 0.32; peak *= 1.0; }
-    const off = Math.random() * 1.5;
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(peak, t + 0.008);
-    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    src.connect(f).connect(g).connect(p).connect(this.master);
-    src.start(t, off, dur + 0.05);
-    // Low thump of the heel
-    if (surface !== 'water') {
+    const t = ctx.currentTime + Math.random() * 0.008;
+    this.stepSide = -this.stepSide;
+    const pan = ctx.createStereoPanner(); pan.pan.value = this.stepSide * 0.12;
+    const out = ctx.createGain(); out.gain.value = Math.min(1.3, intensity) * (0.85 + Math.random() * 0.3);
+    out.connect(pan).connect(this.master);
+    const run = intensity > 0.9;
+    const roll = run ? 0.045 : 0.085 + Math.random() * 0.02; // heel to toe
+    const grain = (at: number, dur: number, type: BiquadFilterType, f: number, q: number, peak: number, attack = 0.002) => {
+      const src = ctx.createBufferSource(); src.buffer = this.white;
+      src.playbackRate.value = 0.85 + Math.random() * 0.3;
+      const fl = ctx.createBiquadFilter(); fl.type = type; fl.frequency.value = f; fl.Q.value = q;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, at);
+      g.gain.linearRampToValueAtTime(peak, at + attack);
+      g.gain.exponentialRampToValueAtTime(0.0008, at + dur);
+      src.connect(fl).connect(g).connect(out);
+      src.start(at, Math.random() * 1.6, dur + 0.05);
+    };
+    const thud = (at: number, f0: number, peak: number, dur = 0.09) => {
       const o = ctx.createOscillator();
-      o.frequency.setValueAtTime(95 + Math.random() * 20, t);
-      o.frequency.exponentialRampToValueAtTime(45, t + 0.08);
-      const og = ctx.createGain();
-      og.gain.setValueAtTime(0.18 * intensity, t);
-      og.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
-      o.connect(og).connect(this.master);
-      o.start(t); o.stop(t + 0.1);
+      o.frequency.setValueAtTime(f0 * (0.9 + Math.random() * 0.2), at);
+      o.frequency.exponentialRampToValueAtTime(f0 * 0.45, at + dur);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(peak, at);
+      g.gain.exponentialRampToValueAtTime(0.0008, at + dur);
+      o.connect(g).connect(out); o.start(at); o.stop(at + dur + 0.02);
+    };
+    switch (surface) {
+      case 'grass': {
+        // Blades brushing and pressing: a soft thud under a spray of dry rustles.
+        thud(t, 80, 0.16);
+        grain(t, 0.12, 'lowpass', 500, 0.7, 0.08);
+        const n = run ? 10 : 7;
+        for (let i = 0; i < n; i++) grain(t + Math.random() * (roll + 0.1), 0.03 + Math.random() * 0.06, 'bandpass', 2500 + Math.random() * 4000, 1.2, 0.035 + Math.random() * 0.05);
+        break;
+      }
+      case 'gravel': {
+        // Packed road and gravel: a crunch of many tiny stones under the heel, then the toe.
+        thud(t, 90, 0.18);
+        for (const [at, n] of [[t, run ? 16 : 12], [t + roll, run ? 10 : 7]] as [number, number][]) {
+          for (let i = 0; i < n; i++) grain(at + Math.random() * 0.07, 0.012 + Math.random() * 0.02, 'bandpass', 1400 + Math.random() * 3600, 2.2, 0.05 + Math.random() * 0.09, 0.001);
+        }
+        break;
+      }
+      case 'stone': {
+        // Leather boots on flagstones: a hard heel click, a lighter toe click, a short ring.
+        grain(t, 0.035, 'bandpass', 2100 + Math.random() * 500, 3, 0.32, 0.0008);
+        grain(t, 0.06, 'bandpass', 700, 2, 0.12, 0.001);
+        thud(t, 110, 0.12, 0.05);
+        grain(t + roll, 0.025, 'bandpass', 2800 + Math.random() * 600, 3, 0.16, 0.0008);
+        grain(t + 0.01, 0.14, 'bandpass', 1300, 9, 0.025, 0.002); // the courtyard answers faintly
+        break;
+      }
+      case 'wood': {
+        // Planks: a hollow knock and a creak.
+        thud(t, 170, 0.26, 0.12);
+        grain(t, 0.1, 'bandpass', 320, 7, 0.2, 0.001);
+        grain(t + roll, 0.08, 'bandpass', 420, 6, 0.1, 0.001);
+        if (Math.random() < 0.25) grain(t + 0.05, 0.18, 'bandpass', 900 + Math.random() * 300, 18, 0.05, 0.02);
+        break;
+      }
+      case 'mud': {
+        // Wet earth: a heavy squelch and the suck of the boot lifting out.
+        thud(t, 70, 0.2, 0.12);
+        grain(t, 0.16, 'lowpass', 650, 1, 0.22, 0.01);
+        const src = ctx.createBufferSource(); src.buffer = this.white;
+        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 6;
+        bp.frequency.setValueAtTime(700, t + roll + 0.05); bp.frequency.exponentialRampToValueAtTime(240, t + roll + 0.2);
+        const g = ctx.createGain(); g.gain.setValueAtTime(0, t + roll + 0.05); g.gain.linearRampToValueAtTime(0.12, t + roll + 0.08); g.gain.exponentialRampToValueAtTime(0.001, t + roll + 0.24);
+        src.connect(bp).connect(g).connect(out); src.start(t + roll + 0.05, Math.random(), 0.25);
+        break;
+      }
+      case 'water': {
+        // Wading: the foot breaks the surface, water slaps and runs off.
+        grain(t, 0.32, 'bandpass', 900 + Math.random() * 500, 0.8, 0.22, 0.015);
+        grain(t, 0.12, 'lowpass', 400, 0.7, 0.18, 0.005);
+        for (let i = 0; i < 6; i++) grain(t + 0.05 + Math.random() * 0.3, 0.03 + Math.random() * 0.04, 'bandpass', 1500 + Math.random() * 2500, 4, 0.03 + Math.random() * 0.04, 0.003);
+        break;
+      }
+      default: { // bare rock
+        grain(t, 0.05, 'bandpass', 1600 + Math.random() * 500, 1.6, 0.22, 0.001);
+        thud(t, 100, 0.16, 0.07);
+        for (let i = 0; i < 4; i++) grain(t + Math.random() * 0.08, 0.015, 'bandpass', 2500 + Math.random() * 2500, 2, 0.04, 0.001);
+        grain(t + roll, 0.03, 'bandpass', 2000, 1.6, 0.1, 0.001);
+      }
     }
   }
 
@@ -225,6 +289,67 @@ export class GameAudio {
     src.connect(f).connect(g).connect(pn);
     src.start(t, Math.random() * 1.5, dur + 0.05);
   }
+
+  private noiseBurst(t: number, dur: number, type: BiquadFilterType, freq: number, q: number, peak: number, attack = 0.004) {
+    const ctx = this.ctx!;
+    const src = ctx.createBufferSource();
+    src.buffer = this.white;
+    const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(peak, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(f).connect(g).connect(this.master);
+    src.start(t, Math.random() * 1.5, dur + 0.05);
+  }
+
+  /** A branch snapping: a dry crack, splintering, and a dull thump of wood. */
+  crack() {
+    const ctx = this.ctx; if (!ctx || ctx.state !== 'running') return;
+    const t = ctx.currentTime;
+    this.noiseBurst(t, 0.05, 'highpass', 2500, 0.7, 0.55, 0.001);
+    for (let i = 0; i < 6; i++) this.noiseBurst(t + 0.02 + i * (0.012 + Math.random() * 0.02), 0.03, 'bandpass', 1800 + Math.random() * 2500, 2, 0.25 * Math.random() + 0.08, 0.001);
+    this.noiseBurst(t, 0.12, 'lowpass', 300, 0.7, 0.3);
+  }
+
+  /** Steel on flint: a click and a little shower of sparks. */
+  strike() {
+    const ctx = this.ctx; if (!ctx || ctx.state !== 'running') return;
+    const t = ctx.currentTime;
+    this.noiseBurst(t, 0.03, 'bandpass', 5200, 3, 0.35, 0.001);
+    for (let i = 0; i < 4; i++) this.noiseBurst(t + 0.02 + Math.random() * 0.08, 0.02, 'highpass', 6000, 1, 0.08, 0.001);
+  }
+
+  /** The flame taking: a soft whoomph. */
+  ignite() {
+    const ctx = this.ctx; if (!ctx || ctx.state !== 'running') return;
+    this.noiseBurst(ctx.currentTime, 0.7, 'lowpass', 600, 0.5, 0.35, 0.12);
+  }
+
+  /** A burning brand pushed into water or earth. */
+  hiss(water: boolean) {
+    const ctx = this.ctx; if (!ctx || ctx.state !== 'running') return;
+    const t = ctx.currentTime;
+    if (water) this.noiseBurst(t, 1.1, 'highpass', 3500, 0.6, 0.4, 0.02);
+    else { this.noiseBurst(t, 0.5, 'lowpass', 900, 0.7, 0.35, 0.03); this.noiseBurst(t + 0.1, 0.6, 'highpass', 2500, 0.5, 0.12, 0.05); }
+  }
+
+  /** Continuous crackle of a torch in the hand (0 = none). */
+  setFire(level: number) {
+    const ctx = this.ctx; if (!ctx || ctx.state !== 'running') return;
+    if (!this.fireGain) {
+      if (level <= 0) return;
+      const src = ctx.createBufferSource();
+      src.buffer = this.white; src.loop = true;
+      const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 700;
+      this.fireGain = ctx.createGain(); this.fireGain.gain.value = 0;
+      src.connect(f).connect(this.fireGain).connect(this.master);
+      src.start();
+    }
+    this.fireGain.gain.setTargetAtTime(level * 0.06, ctx.currentTime, 0.3);
+    if (level > 0.05 && Math.random() < 0.08 * level) this.noiseBurst(ctx.currentTime, 0.015 + Math.random() * 0.02, 'bandpass', 1500 + Math.random() * 3000, 1.5, 0.05 + Math.random() * 0.12 * level, 0.001);
+  }
+  private fireGain: GainNode | null = null;
 
   landed(impact: number, surface: Surface) {
     this.footstep(surface, Math.min(1.6, impact / 4));

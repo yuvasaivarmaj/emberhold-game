@@ -14,8 +14,11 @@ scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x554433, 1.2));
 const sun = new THREE.DirectionalLight(0xffffff, 2.5); sun.position.set(-2, 3, 1); scene.add(sun);
 const anchor = new THREE.Object3D(); scene.add(anchor);
 const vm = new Viewmodel(anchor);
-const fake: any = { bobPhase: +(params.get('phase') ?? 0), grounded: true, swimming: params.has('swim'), sprinting: params.has('sprint'), speed: +(params.get('speed') ?? 0), crouching: false, landDip: 0 };
-for (let i = 0; i < 60; i++) vm.update(1 / 30, fake, 0, 0);
+await vm.load(location.origin + '/');
+const fake: any = { bobPhase: +(params.get('phase') ?? 0), swimPhase: +(params.get('sp') ?? 0), grounded: !params.has('air'), swimming: params.has('swim'), sprinting: params.has('sprint'), speed: +(params.get('speed') ?? 0), crouching: false, landDip: 0 };
+if (params.has('ride')) vm.riding = true;
+if (params.has('torch')) vm.holding = 'torch';
+for (let i = 0; i < 90; i++) vm.update(1 / 30, fake, 0, 0);
 const side = params.get('view');
 if (side === 'top') { cam.position.set(0, 0.5, -0.32); cam.lookAt(0, -0.22, -0.4); }
 if (side === 'side') { cam.position.set(0.8, -0.2, -0.35); cam.lookAt(0, -0.22, -0.38); }
