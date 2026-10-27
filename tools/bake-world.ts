@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Simplex2, smoothstep, lerp } from '../src/world/Noise';
 import {
   WORLD_HALF, HF_N, CELL, MASK_RES, WATER_LEVEL, HEIGHT_MIN, HEIGHT_MAX, EMBERHOLD, QUILLHAVEN, LAKE,
-  RIVERS, ROADS, smoothPath, type P,
+  RIVERS, ROADS, smoothPath, fortShape, type P,
 } from '../src/world/Layout';
 
 const t0 = Date.now();
@@ -112,12 +112,33 @@ function fortHeight(r: number): number | null {
   // Terraces from the summit down: keep, wall scarp, middle courts, scarp, lower yard, outer scarp.
   const { keepR, middleR, outerR } = E;
   if (r < keepR) return HS;
-  if (r < keepR + 22) return lerp(HS, HS - 9, smoothstep(keepR, keepR + 22, r));
-  if (r < middleR) return lerp(HS - 9, HS - 15, (r - keepR - 22) / (middleR - keepR - 22));
-  if (r < middleR + 22) return lerp(HS - 15, HS - 24, smoothstep(middleR, middleR + 22, r));
-  if (r < outerR) return lerp(HS - 24, HS - 37, (r - middleR - 22) / (outerR - middleR - 22));
-  if (r < outerR + 26) return lerp(HS - 37, HS - 44, smoothstep(outerR, outerR + 26, r));
+  if (r < keepR + 22) return lerp(HS, HS - 12, smoothstep(keepR, keepR + 22, r));
+  if (r < middleR) return lerp(HS - 12, HS - 19, (r - keepR - 22) / (middleR - keepR - 22));
+  if (r < middleR + 22) return lerp(HS - 19, HS - 31, smoothstep(middleR, middleR + 22, r));
+  if (r < outerR) return lerp(HS - 31, HS - 46, (r - middleR - 22) / (outerR - middleR - 22));
+  if (r < outerR + 26) return lerp(HS - 46, HS - 56, smoothstep(outerR, outerR + 26, r));
   return null;
+}
+function avenueHeight(r: number) {
+  // A moving average of the terraces turns each scarp into a ~50 m ramp.
+  let s = 0, n = 0;
+  for (let k = -12; k <= 12; k++) {
+    const h = fortHeight(Math.max(0, r + k * 2.2));
+    if (h !== null) { s += h; n++; }
+  }
+  return n ? s / n : HS - 56;
+}
+const AV_S = Math.atan2(462, 30), AV_N = Math.atan2(-470, -30);
+function avenueWeight(x: number, z: number, r: number) {
+  let w = 0;
+  for (const [a, rMin] of [[AV_S, 0], [AV_N, E.keepR + 26]] as [number, number][]) {
+    const ux = Math.cos(a), uz = Math.sin(a);
+    const along = (x - E.x) * ux + (z - E.z) * uz;
+    if (along < 0) continue;
+    const across = Math.abs(-(x - E.x) * uz + (z - E.z) * ux);
+    w = Math.max(w, (1 - smoothstep(6, 16, across)) * smoothstep(rMin, rMin + 20, r));
+  }
+  return w;
 }
 for (let iz = 0; iz < N; iz++) {
   const z = wx(iz);
@@ -127,16 +148,19 @@ for (let iz = 0; iz < N; iz++) {
     const dx = x - E.x, dz = z - E.z;
     const ang = Math.atan2(dz, dx);
     // A slightly irregular, organic outline.
-    const shape = 1 + 0.05 * Math.sin(2 * ang + 1.1) + 0.03 * Math.sin(3 * ang + 0.4);
-    const r = Math.hypot(dx, dz) / shape;
+    const r = Math.hypot(dx, dz) / fortShape(ang);
     if (r > E.hillR) continue;
     const k = iz * N + ix;
     const fort = fortHeight(r);
     if (fort !== null) {
       H[k] = fort + nB.fbm(x * 0.05, z * 0.05, 2) * 0.25;
+      // The processional avenues: the terraces' scarps become ramps where the way
+      // climbs from the gates to the high halls.
+      const av = avenueWeight(x, z, r);
+      if (av > 0) H[k] = lerp(H[k], avenueHeight(r), av);
     } else {
       const t = smoothstep(E.outerR + 26, E.hillR, r);
-      const slope = lerp(HS - 44, H[k], Math.pow(t, 0.8));
+      const slope = lerp(HS - 56, H[k], Math.pow(t, 0.8));
       H[k] = slope + nA.fbm(x * 0.01, z * 0.01, 3) * 3 * Math.sin(t * Math.PI);
     }
   }
@@ -321,7 +345,18 @@ for (let mz = 0; mz < M; mz++) {
     if (castle || de < E.outerR + 70) forest = 0;
     if (slope > 0.9) forest *= 0.3;
     // Road closeness (1 at the centre line)
-    const roadC = 1 - smoothstep(roadHalf[gi] - 0.5, roadHalf[gi] + 1.5, rd);
+    let roadC = 1 - smoothstep(roadHalf[gi] - 0.5, roadHalf[gi] + 1.5, rd);
+    if (castle) {
+      const rr = de / fortShape(Math.atan2(z - E.z, x - E.x));
+      const dx2 = x - E.x, dz2 = z - E.z;
+      let aw = 0;
+      for (const [a, rMin] of [[AV_S, 0], [AV_N, E.keepR + 26]] as [number, number][]) {
+        const ux = Math.cos(a), uz = Math.sin(a);
+        if (dx2 * ux + dz2 * uz < 0 || rr < rMin) continue;
+        aw = Math.max(aw, 1 - smoothstep(4.5, 6.5, Math.abs(-dx2 * uz + dz2 * ux)));
+      }
+      roadC = Math.max(roadC, aw);
+    }
     const o = (mz * M + mx) * 4;
     mask[o] = Math.round(Math.max(0, Math.min(1, roadC)) * 255);
     mask[o + 1] = use === 6 ? 255 : 0;

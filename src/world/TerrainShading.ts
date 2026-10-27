@@ -5,7 +5,7 @@ import * as THREE from 'three/webgpu';
 import {
   Fn, float, vec2, vec3, vec4, color, mix, smoothstep, clamp, max, texture, fract, abs,
   positionWorld, normalWorld, normalView, positionView, cameraPosition,
-  mx_noise_float, mx_fractal_noise_float,
+  mx_noise_float, mx_fractal_noise_float, atan, sin, floor, hash, uint,
 } from 'three/tsl';
 import { WATER_LEVEL, WORLD_HALF, WORLD_SIZE, EMBERHOLD } from './Layout';
 import type { Heightfield } from './Heightfield';
@@ -65,6 +65,27 @@ export const rockWeight = Fn(([slopeY, jitter]: any) => smoothstep(0.86, 0.72, s
 export const bankWeight = Fn(([h, jitter]: any) => float(1).sub(smoothstep(W.add(0.25), W.add(1.25), h.add(jitter.mul(0.3)))));
 
 /** Crisp field edges: threshold the blurred 8 m mask with a little noise. */
+/**
+ * Emberhold's grounds: x = summit flagstones, y = lawns of the middle courts and the
+ * grassed scarps, z = the trodden earth of the lower yard.
+ */
+export const fortZone = Fn(([xz]: any) => {
+  const d = xz.sub(vec2(EMBERHOLD.x, EMBERHOLD.z));
+  const a = atan(d.y, d.x);
+  const shape = float(1).add(sin(a.mul(2).add(1.1)).mul(0.05)).add(sin(a.mul(3).add(0.4)).mul(0.03));
+  const r = d.length().div(shape).add(mx_noise_float(xz.mul(0.08)).mul(3.0));
+  const { keepR, middleR, outerR } = EMBERHOLD;
+  // The summit: flagged courts around the hall and keep and along the wall ranges,
+  // with garden lawns between.
+  const summitAll = smoothstep(keepR + 6, keepR - 2, r);
+  const court = float(1).sub(smoothstep(72.0, 80.0, r).mul(smoothstep(keepR - 34, keepR - 40, r)));
+  const summit = summitAll.mul(court);
+  const lower = smoothstep(middleR + 18, middleR + 26, r).mul(smoothstep(outerR + 6, outerR, r));
+  const inside = smoothstep(outerR + 30, outerR + 20, r);
+  const lawn = inside.sub(summit).sub(lower).max(0.0);
+  return vec3(summit, lawn, lower);
+});
+
 const crisp = (m: any, xz: any) => smoothstep(0.42, 0.58, m.add(mx_noise_float(xz.mul(0.35)).mul(0.12)));
 
 /** Vine rows run east-west, 2.6 m apart. */
@@ -88,12 +109,14 @@ export const grassField = Fn(([xz, slopeY, h]: any) => {
   const dirt = dirtMask(xz).mul(float(1).sub(crop));
   const high = smoothstep(330.0, 260.0, h);
   let cover: any = float(1).sub(rockW).mul(float(1).sub(bankW)).mul(float(1).sub(dirt.mul(0.95))).mul(high);
-  cover = cover.mul(float(1).sub(road)).mul(float(1).sub(settle.mul(0.85)));
+  const fz = fortZone(xz);
+  const yardS = settle.mul(float(1).sub(fz.y));
+  cover = cover.mul(float(1).sub(road)).mul(float(1).sub(yardS.mul(0.85))).mul(float(1).sub(fz.x));
   cover = cover.mul(float(1).sub(forest.mul(0.55)));
   cover = cover.mul(float(1).sub(vine.mul(vineRows(xz)).mul(0.9)));
   const pasture = pastureWeight(xz);
   let height: any = mix(float(1), float(0.35), pasture);
-  height = height.mul(float(1).sub(forest.mul(0.35))).mul(float(1).sub(settle.mul(0.6))).mul(float(1).sub(vine.mul(0.4)));
+  height = height.mul(float(1).sub(forest.mul(0.35))).mul(float(1).sub(yardS.mul(0.6))).mul(float(1).sub(fz.y.mul(0.45))).mul(float(1).sub(vine.mul(0.4)));
   height = mix(height, float(2.0), wheat).mul(mix(float(1), float(0.85), barley)).mul(mix(float(1), float(0.7), flax));
   height = mix(height, float(1.6), barley.mul(float(1).sub(wheat)));
   height = mix(height, float(1.25), flax.mul(float(1).sub(wheat).sub(barley).max(0.0)));
@@ -171,6 +194,16 @@ export function createTerrainMaterial(hf: Heightfield): THREE.MeshStandardNodeMa
   const soilCol = mix(PAL.soil, PAL.soilDark, meso).mul(fine.mul(0.08).add(1.0));
   const roadCol = mix(PAL.road, PAL.roadDark, smoothstep(0.3, 0.8, mx_noise_float(xz.mul(vec2(0.6, 0.15))).mul(0.5).add(0.5)).mul(0.6)).mul(fine.mul(0.1).add(1.0));
   const yardCol = mix(PAL.yard, PAL.soil, meso.mul(0.5)).mul(fine.mul(0.12).add(1.0));
+  // Emberhold: flagstones on the summit, lawns in the courts, trodden earth and muck below.
+  const fz = fortZone(xz);
+  const flagUV = xz.div(vec2(1.4, 0.95));
+  const flagRow = floor(flagUV.y);
+  const flagCell = vec2(floor(flagUV.x.add(fract(flagRow.mul(0.5)))), flagRow);
+  const flagF = fract(vec2(flagUV.x.add(fract(flagRow.mul(0.5))), flagUV.y));
+  const flagJoint = smoothstep(0.0, 0.05, flagF.x).mul(smoothstep(1.0, 0.95, flagF.x)).mul(smoothstep(0.0, 0.07, flagF.y)).mul(smoothstep(1.0, 0.93, flagF.y));
+  const flagV = hash(uint(flagCell.x.add(20000.0)).mul(uint(73856093)).bitXor(uint(flagCell.y.add(20000.0)).mul(uint(19349663))));
+  const flagCol = mix(color(0x6f685d), color(0x857c6d), flagV).mul(mix(float(0.55), float(1.0), flagJoint)).mul(fine.mul(0.08).add(1.0));
+  const muck = mix(color(0x4f4234), color(0x6b5b46), smoothstep(-0.3, 0.5, meso)).mul(fine.mul(0.15).add(1.0));
 
   const rockN = mx_fractal_noise_float(p.mul(vec3(0.11, 0.42, 0.11)), 4, 2.1, 0.55);
   const strata = mx_noise_float(vec3(p.y.mul(0.9), p.x.mul(0.02), p.z.mul(0.02))).mul(0.5).add(0.5);
@@ -188,7 +221,9 @@ export function createTerrainMaterial(hf: Heightfield): THREE.MeshStandardNodeMa
   albedo = mix(albedo, soilCol, dirt.mul(float(1).sub(rockW)));
   albedo = mix(albedo, fieldCol, crop);
   albedo = mix(albedo, vineCol, vine);
-  albedo = mix(albedo, yardCol, settle);
+  albedo = mix(albedo, yardCol, settle.mul(float(1).sub(fz.y)));
+  albedo = mix(albedo, muck, fz.z.mul(settle));
+  albedo = mix(albedo, flagCol, fz.x);
   albedo = mix(albedo, roadCol, road);
   albedo = mix(albedo, bankCol, bankW.mul(float(1).sub(rockW)));
   albedo = mix(albedo, rockCol, rockW);
@@ -207,8 +242,13 @@ export function createTerrainMaterial(hf: Heightfield): THREE.MeshStandardNodeMa
   let relief: any = mix(groundRelief, rockRelief, rockW);
   relief = mix(relief, roadRelief, road);
   relief = relief.add(vineRows(xz).mul(vine).mul(0.06));
+  relief = mix(relief, flagJoint.mul(0.012).add(fine.mul(0.003)), fz.x);
 
   mat.colorNode = clamp(albedo, 0.0, 1.0);
+  const dbg = new URLSearchParams(location.search).get('dbgt');
+  if (dbg === 'fz') mat.colorNode = fz;
+  if (dbg === 'lm') mat.colorNode = lm.xyz;
+  if (dbg === 'rock') mat.colorNode = vec3(rockW, bankW, snowW);
   mat.roughnessNode = rough;
   mat.metalnessNode = float(0);
   mat.normalNode = bumpFromHeight(relief.mul(near));

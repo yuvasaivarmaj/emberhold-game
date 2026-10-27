@@ -7,6 +7,9 @@ import { Grass } from '../world/Grass';
 import { Trees } from '../world/Trees';
 import { Rocks } from '../world/Rocks';
 import { Water } from '../world/Water';
+import { Emberhold } from '../world/Emberhold';
+import { Structures } from '../world/Structures';
+import { updateCamAxes } from '../cinematic/Effects';
 import { Physics } from '../physics/Physics';
 import { Player } from '../player/Player';
 import { Viewmodel } from '../player/Viewmodel';
@@ -36,6 +39,8 @@ export class Game {
   grass!: Grass;
   trees!: Trees;
   rocks!: Rocks;
+  emberhold!: Emberhold;
+  structures!: Structures;
   water!: Water;
   physics = new Physics();
   player!: Player;
@@ -114,6 +119,13 @@ export class Game {
       await nextFrame();
       this.rocks = new Rocks(this.hf, this.q.treeDensity);
       this.scene.add(this.rocks.group);
+      ui.progress(0.77, 'Raising Emberhold…');
+      await nextFrame();
+      this.emberhold = new Emberhold(this.hf);
+      this.scene.add(this.emberhold.group);
+      this.structures = new Structures(this.hf, this.emberhold.materials);
+      this.scene.add(this.structures.group);
+      if (this.params.has('nofortshadow')) this.emberhold.group.traverse((o) => { o.castShadow = false; });
 
       ui.progress(0.8, 'Sowing the meadows…');
       await nextFrame();
@@ -126,6 +138,8 @@ export class Game {
       await nextFrame();
       this.physics.addTrees(this.trees.instances);
       this.physics.addRocks(this.rocks.instances, this.rocks.geometries);
+      this.physics.addStatic(this.emberhold.colliders);
+      this.physics.addStatic(this.structures.colliders);
       this.player = new Player(this.physics, this.hf, SPAWN, this.camera);
       this.hands = new Viewmodel(this.camera);
       this.hands.visible = this.settings.showHands;
@@ -346,13 +360,24 @@ export class Game {
   }
 
   private updateWorld(dt: number, _force = false) {
+    const dc = this.params.get('cam');
+    if (dc) {
+      // Debug: a free camera for test shots (?cam=x,y,z&look=x,y,z).
+      const [x, y, z] = dc.split(',').map(Number);
+      const [lx, ly, lz] = (this.params.get('look') ?? '900,60,-700').split(',').map(Number);
+      this.camera.position.set(x, y, z);
+      this.camera.lookAt(lx, ly, lz);
+      this.hands.rig.visible = false;
+    }
     const cam = this.camera.position;
     this.terrain.update(cam);
     this.grass.update(this.camera);
     this.camera.updateMatrixWorld();
     this.trees.update(this.camera);
     this.rocks.update(cam);
+    updateCamAxes(this.camera);
     this.sky.update(dt, this.renderer, cam);
+    this.emberhold.update(dt, this.sky.uNight.value as number);
     this.sky.updateStars(this.camera, this.renderer.domElement.height);
   }
 

@@ -22,9 +22,9 @@ export const EMBERHOLD = {
   middleR: 330,   // middle courts of the sworn households
   outerR: 470,    // curtain wall around the lower yard
   hillR: 1050,    // the hill itself
-  summit: 62,     // summit height above the surrounding plain
-  southGate: [930, -238] as P,
-  northGate: [870, -1170] as P,
+  summit: 88,     // summit height above the surrounding plain
+  southGate: [928, -262] as P,  // just inside the outer gate
+  northGate: [870, -1162] as P,
 };
 
 export const QUILLHAVEN = { x: -1350, z: 1900, r: 150 };
@@ -56,7 +56,7 @@ export const RIVERS: { name: string; width: number; pts: P[] }[] = [
 export const ROADS: { name: string; width: number; pts: P[] }[] = [
   {
     name: 'South road', width: 6,
-    pts: [[930, -238], [960, -60], [990, 160], [1010, 520], [1080, 1100], [960, 1800], [780, 2600], [700, 3400], [640, 4300]],
+    pts: [[928, -262], [935, -200], [960, -60], [990, 160], [1010, 520], [1080, 1100], [960, 1800], [780, 2600], [700, 3400], [640, 4300]],
   },
   {
     name: 'Quill road', width: 4.5,
@@ -68,7 +68,7 @@ export const ROADS: { name: string; width: number; pts: P[] }[] = [
   },
   {
     name: 'North road', width: 5,
-    pts: [[870, -1170], [760, -1700], [560, -2400], [420, -3200], [300, -4300]],
+    pts: [[870, -1162], [858, -1240], [760, -1700], [560, -2400], [420, -3200], [300, -4300]],
   },
   {
     name: 'East road', width: 5,
@@ -112,4 +112,9 @@ export function distToPath(x: number, z: number, path: P[]) {
     if (d < best) best = d;
   }
   return best;
+}
+
+/** Emberhold's slightly irregular outline: multiply a ring radius by this at angle `a`. */
+export function fortShape(a: number) {
+  return 1 + 0.05 * Math.sin(2 * a + 1.1) + 0.03 * Math.sin(3 * a + 0.4);
 }

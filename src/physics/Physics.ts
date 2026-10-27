@@ -6,6 +6,7 @@ import { Heightfield } from '../world/Heightfield';
 import { HF_N, HF_RES, WORLD_SIZE, WORLD_HALF } from '../world/Layout';
 import type { TreeInstance } from '../world/Trees';
 import type { RockInstance } from '../world/Rocks';
+import type { Collider } from '../world/Emberhold';
 
 interface Streamed { x: number; z: number; make: () => RAPIER.ColliderDesc | null; collider: RAPIER.Collider | null }
 
@@ -72,6 +73,21 @@ export class Physics {
         const desc = RAPIER.ColliderDesc.convexHull(pts);
         return desc ? desc.setTranslation(r.x, r.y, r.z) : null;
       });
+    }
+  }
+
+  /** Buildings and walls: streamed like the rest, as boxes and cylinders. */
+  addStatic(list: Collider[]) {
+    const q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
+    for (const c of list) {
+      if (c.kind === 'box') {
+        this.register(c.x, c.z, () => {
+          q.setFromAxisAngle(up, c.rotY);
+          return RAPIER.ColliderDesc.cuboid(c.hx, c.hy, c.hz).setTranslation(c.x, c.y, c.z).setRotation({ x: q.x, y: q.y, z: q.z, w: q.w });
+        });
+      } else {
+        this.register(c.x, c.z, () => RAPIER.ColliderDesc.cylinder(c.hh, c.r).setTranslation(c.x, c.y, c.z));
+      }
     }
   }
 
