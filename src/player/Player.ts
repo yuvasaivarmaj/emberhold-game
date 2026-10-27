@@ -72,6 +72,26 @@ export class Player {
     this.vel.set(0, 0, 0);
   }
 
+  /** Turn the walking body's collider off while riding (the horse has its own). */
+  setActive(on: boolean) { this.collider.setEnabled(on); }
+
+  /** Look around from the saddle: the horse carries the eye, the mouse turns the head. */
+  rideLook(dt: number, input: Input, s: UserSettings, eye: THREE.Vector3, turn: number, speed: number, ground: number) {
+    const sens = 0.0021 * s.sensitivity;
+    this.yaw += turn - input.mouseDX * sens;
+    this.pitch -= input.mouseDY * sens * (s.invertY ? -1 : 1);
+    this.pitch = Math.max(-1.3, Math.min(1.3, this.pitch));
+    this.feet.set(eye.x, ground, eye.z);
+    this.speed = 0; this.grounded = true; this.swimming = false; this.sprinting = false; this.crouching = false;
+    const cam = this.camera;
+    cam.position.copy(eye);
+    this.roll += (-turn / Math.max(dt, 1e-3) * 0.01 - this.roll) * (1 - Math.exp(-4 * dt));
+    cam.rotation.set(this.pitch, this.yaw, this.roll, 'YXZ');
+    const fovTarget = verticalFov(s.fov + (speed > 9 ? 8 : speed > 6 ? 4 : 0), cam.aspect);
+    this.fovKick += (fovTarget - this.fovKick) * (1 - Math.exp(-4 * dt));
+    if (Math.abs(cam.fov - this.fovKick) > 0.01) { cam.fov = this.fovKick; cam.updateProjectionMatrix(); }
+  }
+
   update(dt: number, input: Input, s: UserSettings): PlayerEvents {
     const events: PlayerEvents = { footstep: null, landed: 0 };
 

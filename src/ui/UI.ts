@@ -89,6 +89,15 @@ export class UI {
     setTimeout(() => t.classList.remove('show'), ms);
   }
 
+  private promptText = '';
+  prompt(html: string | null) {
+    const el = $('prompt');
+    if ((html ?? '') === this.promptText) return;
+    this.promptText = html ?? '';
+    if (html) el.innerHTML = html;
+    el.classList.toggle('on', !!html);
+  }
+
   hideHint() { $('hint').style.opacity = '0'; }
 
   clock(hour: number) {

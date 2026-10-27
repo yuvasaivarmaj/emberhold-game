@@ -67,6 +67,11 @@ export const ROADS: { name: string; width: number; pts: P[] }[] = [
     pts: [[-1350, 1900], [-1900, 1750], [-2700, 1600], [-3500, 1450], [-4300, 1400]],
   },
   {
+    // Out of Quillhaven over the north bridge, where the watchboy keeps the bell.
+    name: 'North lane', width: 3.6,
+    pts: [[-1350, 1900], [-1356, 1820], [-1380, 1740], [-1418, 1640], [-1490, 1480], [-1600, 1260]],
+  },
+  {
     name: 'North road', width: 5,
     pts: [[870, -1162], [858, -1240], [760, -1700], [560, -2400], [420, -3200], [300, -4300]],
   },

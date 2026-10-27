@@ -9,6 +9,8 @@ import { Rocks } from '../world/Rocks';
 import { Water } from '../world/Water';
 import { Emberhold } from '../world/Emberhold';
 import { Structures } from '../world/Structures';
+import { Quillhaven, quillhavenPlantings } from '../world/Quillhaven';
+import { Horses } from '../world/Horses';
 import { updateCamAxes } from '../cinematic/Effects';
 import { Physics } from '../physics/Physics';
 import { Player } from '../player/Player';
@@ -21,7 +23,7 @@ import { chapterById } from '../story/Chapters';
 import { Input } from './Input';
 import { UI } from '../ui/UI';
 import { PRESETS, loadSettings, saveSettings, verticalFov, type UserSettings, type QualityPreset } from './Settings';
-import { SPAWN, riverDistance } from '../world/WorldConfig';
+import { SPAWN, riverDistance, roadAt, settlementAt, WATER_LEVEL } from '../world/WorldConfig';
 
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 
@@ -41,6 +43,10 @@ export class Game {
   rocks!: Rocks;
   emberhold!: Emberhold;
   structures!: Structures;
+  quillhaven!: Quillhaven;
+  horses!: Horses;
+  private grips = [new THREE.Vector3(), new THREE.Vector3()];
+  private eye = new THREE.Vector3();
   water!: Water;
   physics = new Physics();
   player!: Player;
@@ -112,7 +118,7 @@ export class Game {
 
       ui.progress(0.5, 'Growing the trees…');
       await nextFrame();
-      this.trees = new Trees(this.hf, this.sky, this.q.treeDensity, this.q.treeFullDistance, this.q.treeMidDistance, this.q.msaa > 0);
+      this.trees = new Trees(this.hf, this.sky, this.q.treeDensity, this.q.treeFullDistance, this.q.treeMidDistance, this.q.msaa > 0, quillhavenPlantings());
       this.trees.bakeImpostors(this.renderer);
       if (!this.params.has('notrees')) this.scene.add(this.trees.group);
       ui.progress(0.74, 'Scattering stone…');
@@ -125,6 +131,8 @@ export class Game {
       this.scene.add(this.emberhold.group);
       this.structures = new Structures(this.hf, this.emberhold.materials);
       this.scene.add(this.structures.group);
+      this.quillhaven = new Quillhaven(this.hf, this.emberhold.materials);
+      this.scene.add(this.quillhaven.group);
       if (this.params.has('nofortshadow')) this.emberhold.group.traverse((o) => { o.castShadow = false; });
 
       ui.progress(0.8, 'Sowing the meadows…');
@@ -140,7 +148,10 @@ export class Game {
       this.physics.addRocks(this.rocks.instances, this.rocks.geometries);
       this.physics.addStatic(this.emberhold.colliders);
       this.physics.addStatic(this.structures.colliders);
+      this.physics.addStatic(this.quillhaven.colliders);
       this.player = new Player(this.physics, this.hf, SPAWN, this.camera);
+      this.horses = new Horses(this.hf, this.physics);
+      this.scene.add(this.horses.group);
       this.hands = new Viewmodel(this.camera);
       this.hands.visible = this.settings.showHands;
       this.restorePose();
@@ -190,6 +201,13 @@ export class Game {
       if (this.params.has('still')) {
         // Test mode: render a few frames then stop (for slow software renderers).
         this.enter(false);
+        if (this.params.has('mount')) {
+          // Test: in the saddle of the nearest horse, moving at the given speed.
+          const h = this.horses.list.reduce((a, b) => (Math.hypot(a.x - this.player.feet.x, a.z - this.player.feet.z) < Math.hypot(b.x - this.player.feet.x, b.z - this.player.feet.z) ? a : b));
+          this.mountHorse(h);
+          h.speed = +(this.params.get('mount') || 0);
+          h.phase = +(this.params.get('phase') ?? 0.3);
+        }
         for (let i = 0; i < +(this.params.get('still') || 3); i++) { this.frame(); await nextFrame(); }
         (this as any).stillDone = true;
         return;
@@ -274,6 +292,12 @@ export class Game {
       this.playSeconds = save.playSeconds;
       this.player.setPose(save.x, save.y + 0.05, save.z, save.yaw, save.pitch);
       this.sky.setHour(save.hour);
+      const rode = this.horses.list.find((h) => h.name === save.flags.riding);
+      if (rode && !this.horses.mounted) {
+        rode.x = save.x; rode.z = save.z; rode.yaw = +(save.flags.horseYaw ?? rode.yaw);
+        rode.place(this.hf);
+        this.mountHorse(rode);
+      }
     }
     this.enter(true);
   }
@@ -302,6 +326,15 @@ export class Game {
     });
   }
 
+  private mountHorse(h: import('../world/Horses').Horse) {
+    this.player.setActive(false);
+    this.horses.mount(h);
+    this.hands.riding = true;
+    // Face the way the horse faces.
+    this.player.yaw = h.yaw;
+    this.player.pitch = Math.min(this.player.pitch, -0.12);
+  }
+
   /** Used by the opening film to keep the world (terrain, grass, trees, sky) updating. */
   cineWorldUpdate(dt: number) { this.updateWorld(dt); }
 
@@ -310,7 +343,9 @@ export class Game {
     const p = this.player;
     const d: SaveData = {
       v: 1, chapter: this.chapter, x: p.feet.x, y: p.feet.y, z: p.feet.z, yaw: p.yaw, pitch: p.pitch,
-      hour: this.sky.hour, flags: {}, savedAt: Date.now(), playSeconds: Math.round(this.playSeconds),
+      hour: this.sky.hour,
+      flags: this.horses?.mounted ? { riding: this.horses.mounted.name, horseYaw: this.horses.mounted.yaw } : {},
+      savedAt: Date.now(), playSeconds: Math.round(this.playSeconds),
     };
     writeSave(d);
   }
@@ -378,6 +413,17 @@ export class Game {
     updateCamAxes(this.camera);
     this.sky.update(dt, this.renderer, cam);
     this.emberhold.update(dt, this.sky.uNight.value as number);
+    this.quillhaven.update(dt, this.sky.uNight.value as number);
+    if (this.horses) {
+      const ridden = this.horses.mounted;
+      this.horses.update(dt, this.clock.getElapsed(), cam, (h, leg) => {
+        const d = Math.hypot(h.x - cam.x, h.z - cam.z);
+        const road = roadAt(h.x, h.z) > 0.4 || settlementAt(h.x, h.z) > 0.5;
+        const surf = h.y < WATER_LEVEL + 0.1 ? 'water' : road ? 'rock' : 'grass';
+        const pace = Math.min(1, 0.35 + Math.abs(h.speed) / 10);
+        this.audio.hoof(surf, (h === ridden ? 0.75 : 1 / (1 + d * 0.15)) * pace, h === ridden ? (leg % 2 ? -0.25 : 0.25) : 0);
+      });
+    }
     this.sky.updateStars(this.camera, this.renderer.domElement.height);
   }
 
@@ -404,13 +450,40 @@ export class Game {
       if (input.hit('F3')) { this.settings.showFps = !this.settings.showFps; saveSettings(this.settings); }
       const fast = input.down('KeyT');
       this.sky.timeScale = fast ? 90 : this.settings.timeScale;
-      const ev = this.player.update(dt, input, this.settings);
+      const horses = this.horses;
+      if (horses.mounted) {
+        const h = horses.mounted;
+        const f = (input.down('KeyW') || input.down('ArrowUp') ? 1 : 0) - (input.down('KeyS') || input.down('ArrowDown') ? 1 : 0);
+        const r = (input.down('KeyD') || input.down('ArrowRight') ? 1 : 0) - (input.down('KeyA') || input.down('ArrowLeft') ? 1 : 0);
+        const yaw0 = h.yaw;
+        horses.ride(dt, {
+          f, r, run: input.down('ShiftLeft') || input.down('ShiftRight'),
+          walk: input.down('ControlLeft') || input.down('KeyC'), jump: input.hit('Space'),
+        }, this.eye);
+        this.player.rideLook(dt, input, this.settings, this.eye, h.yaw - yaw0, Math.abs(h.speed), h.y);
+        this.hands.riding = true;
+        this.hands.rideBob = h.model.body.position.y - 1.22;
+        this.ui.prompt(Math.abs(h.speed) < 0.3 ? `<kbd>E</kbd> Dismount` : null);
+        if (input.hit('KeyE') && Math.abs(h.speed) < 2.6) {
+          const p = horses.dismount();
+          this.player.setActive(true);
+          this.player.setPose(p.x, p.y, p.z, this.player.yaw, this.player.pitch);
+          this.hands.riding = false;
+        }
+      } else {
+        const ev = this.player.update(dt, input, this.settings);
+        if (ev.footstep) this.audio.footstep(ev.footstep.surface, ev.footstep.intensity);
+        if (ev.landed) this.audio.landed(ev.landed, this.player.surface);
+        const look = new THREE.Vector3(-Math.sin(this.player.yaw), 0, -Math.cos(this.player.yaw));
+        const near = horses.nearest(this.player.feet, look);
+        this.ui.prompt(near ? `<kbd>E</kbd> Ride${near.name === 'Ashfoot' ? ' Ashfoot' : ''}` : null);
+        if (near && input.hit('KeyE')) this.mountHorse(near);
+      }
       this.physics.stream(this.player.feet);
       this.hands.visible = this.settings.showHands;
       this.hands.update(dt, this.player, input.mouseDX, input.mouseDY);
+      if (horses.mounted) horses.updateReins(this.hands.grips(this.grips));
       this.physics.step();
-      if (ev.footstep) this.audio.footstep(ev.footstep.surface, ev.footstep.intensity);
-      if (ev.landed) this.audio.landed(ev.landed, this.player.surface);
       this.updateWorld(dt);
       const f = this.player.feet;
       this.audio.update(dt, {

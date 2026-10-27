@@ -9,6 +9,7 @@ import {
 } from 'three/tsl';
 // @ts-ignore - ez-tree source module (JS)
 import { Tree } from 'ez-tree-src';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { Heightfield } from './Heightfield';
 import { Simplex2, mulberry32, smoothstep as sstep } from './Noise';
 import { WORLD_HALF, EMBERHOLD_SITE, riverDistance, roadAt, forestAt, settlementAt } from './WorldConfig';
@@ -19,7 +20,17 @@ interface Species {
   height: [number, number];
   leafTint: number;
   bush?: boolean;
+  /** Adjusts the preset's options before the tree is grown. */
+  tune?: (o: any) => void;
+  /** Aerial roots hanging from the branches to the ground (banyan). */
+  roots?: number;
+  /** Scale to this crown width instead of to the height. */
+  fitWidth?: number;
+  /** Only placed by hand (see plantings), never scattered. */
+  planted?: boolean;
 }
+
+export interface Planting { kind: string; x: number; z: number; height?: number }
 
 const SPECIES: Record<string, Species> = {
   oakL: { preset: 'Oak Large', height: [16, 23], leafTint: 0xd9e2a8 },
@@ -31,6 +42,26 @@ const SPECIES: Record<string, Species> = {
   pineM: { preset: 'Pine Medium', height: [11, 17], leafTint: 0xcad6ac },
   bush1: { preset: 'Bush 1', height: [1.4, 2.4], leafTint: 0xd6dea6, bush: true },
   bush2: { preset: 'Bush 2', height: [1.1, 2.0], leafTint: 0xdee4b0, bush: true },
+  // The old elms above Quillhaven's tower, where the rooks hold council.
+  elm: {
+    preset: 'Ash Large', height: [24, 30], leafTint: 0xc4d096, planted: true,
+    tune: (o) => { o.seed = 4242; o.branch.angle[1] = 38; o.branch.length[0] *= 1.15; o.leaves.count = Math.ceil(o.leaves.count * 1.2); },
+  },
+  // The old banyan: a squat, enormous crown on a trunk like a hall pillar, held up by its own hanging roots.
+  banyan: {
+    preset: 'Oak Large', height: [22, 22], leafTint: 0x9fb878, planted: true, roots: 90, fitWidth: 50,
+    tune: (o) => {
+      o.seed = 777;
+      o.branch.levels = 3;
+      o.branch.length[0] = 15; o.branch.radius[0] = 6; o.branch.taper[0] = 0.5;
+      o.branch.children[0] = 14; o.branch.angle[1] = 88; o.branch.start[1] = 0.55;
+      o.branch.length[1] = 34; o.branch.radius[1] = 0.75; o.branch.taper[1] = 0.6;
+      o.branch.children[1] = 6; o.branch.angle[2] = 34; o.branch.length[2] = 11;
+      o.branch.length[2] = 8; o.branch.length[3] = 4; o.branch.force.strength = -0.012;
+      o.branch.gnarliness[0] = 0.05; o.branch.gnarliness[1] = 0.1;
+      o.leaves.count = 14; o.leaves.size = 5.5;
+    },
+  },
 };
 
 export interface TreeInstance {
@@ -80,9 +111,47 @@ const ATLAS_COLS = 4;
 const ATLAS_ROWS = 2;
 const CELL_PX = 256;
 
-function makeTreeGeometry(preset: string, lod: number, targetHeight: number): TreeGeo {
+/** Hanging roots: thin columns from points on the lower branches down to the ground. */
+function addAerialRoots(geo: THREE.BufferGeometry, count: number, lod: number) {
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const rand = mulberry32(31337);
+  const cand: THREE.Vector3[] = [];
+  const v = new THREE.Vector3();
+  geo.computeBoundingBox();
+  const top = geo.boundingBox!.max.y;
+  for (let i = 0; i < pos.count; i += 3) {
+    v.fromBufferAttribute(pos, i);
+    const r = Math.hypot(v.x, v.z);
+    if (r > 5 && v.y > 5 && v.y < top * 0.75) cand.push(v.clone());
+  }
+  const parts: THREE.BufferGeometry[] = [geo];
+  const n = lod > 0 ? Math.ceil(count * 0.4) : count;
+  for (let k = 0; k < n && cand.length; k++) {
+    const p = cand[Math.floor(rand() * cand.length)];
+    // Old roots thicken into pillars; young ones are thin strings.
+    const old = rand() < 0.3;
+    const rad = old ? 0.25 + rand() * 0.35 : 0.03 + rand() * 0.06;
+    const g = new THREE.CylinderGeometry(rad * 0.8, rad * (old ? 1.6 : 1), p.y + 0.6, old ? 7 : 4, 1, true);
+    g.translate(p.x + (rand() - 0.5) * 0.4, p.y / 2 - 0.3, p.z + (rand() - 0.5) * 0.4);
+    // Match the bark mesh's attributes so the roots share its material.
+    for (const name of Object.keys(g.attributes)) if (!geo.attributes[name]) g.deleteAttribute(name);
+    for (const name of Object.keys(geo.attributes)) {
+      if (!g.attributes[name]) {
+        const src = geo.attributes[name] as THREE.BufferAttribute;
+        g.setAttribute(name, new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * src.itemSize), src.itemSize));
+      }
+    }
+    parts.push(g);
+  }
+  const merged = mergeGeometries(parts.map((g) => (geo.index ? (g.index ? g : g) : g.index ? g.toNonIndexed() : g)), false);
+  if (!merged) return;
+  geo.copy(merged);
+}
+
+function makeTreeGeometry(sp: Species, lod: number, targetHeight: number): TreeGeo {
   const tree = new Tree();
-  tree.loadPreset(preset); // generates
+  tree.loadPreset(sp.preset); // generates
+  if (sp.tune) { sp.tune(tree.options); tree.generate(); }
   if (lod > 0) {
     const o = tree.options;
     for (const k of Object.keys(o.branch.sections)) o.branch.sections[k] = Math.max(2, Math.ceil(o.branch.sections[k] * 0.35));
@@ -96,9 +165,12 @@ function makeTreeGeometry(preset: string, lod: number, targetHeight: number): Tr
   bGeo.computeBoundingBox();
   lGeo.computeBoundingBox();
   const box = bGeo.boundingBox!.clone().union(lGeo.boundingBox!);
-  const s = targetHeight / Math.max(0.01, box.max.y - box.min.y);
+  const s = sp.fitWidth
+    ? sp.fitWidth / Math.max(box.max.x - box.min.x, box.max.z - box.min.z)
+    : targetHeight / Math.max(0.01, box.max.y - box.min.y);
   bGeo.scale(s, s, s);
   lGeo.scale(s, s, s);
+  if (sp.roots) addAerialRoots(bGeo, sp.roots, lod);
   // Canopy-shaped normals give leaves soft, volumetric lighting instead of flat cards.
   lGeo.computeBoundingBox();
   const lb = lGeo.boundingBox!;
@@ -137,8 +209,15 @@ export class Trees {
   constructor(
     private hf: Heightfield, private sky: SkySystem, density: number,
     private fullDistance: number, private midDistance: number, private a2c: boolean,
+    private plantings: Planting[] = [],
   ) {
     this.place(density);
+    for (const q of plantings) {
+      const sp = SPECIES[q.kind];
+      const baseH = (sp.height[0] + sp.height[1]) / 2;
+      const target = q.height ?? baseH;
+      this.instances.push({ kind: q.kind, x: q.x, y: this.hf.height(q.x, q.z) - 0.4, z: q.z, scale: target / baseH, yaw: (q.x * 7.3 + q.z * 3.1) % (Math.PI * 2), trunkRadius: 0, height: target });
+    }
     this.buildGrid();
     this.uHide.value = midDistance;
     const byKind = new Map<string, TreeInstance[]>();
@@ -151,7 +230,7 @@ export class Trees {
       const baseH = (sp.height[0] + sp.height[1]) / 2;
       let full!: TreeGeo;
       const lods = [0, 1].map((lod) => {
-        const g = makeTreeGeometry(sp.preset, lod, baseH);
+        const g = makeTreeGeometry(sp, lod, baseH);
         if (lod === 0) full = g;
         const barkMat = this.barkMaterial(g.barkMaps, baseH);
         const leafMat = this.leafMaterial(g.leafMap, sp.leafTint, g.alphaTest, baseH);
@@ -308,6 +387,7 @@ export class Trees {
         const p = forest * 0.9 + riverside + 0.004;
         const bushP = (forest * (1 - forest) * 1.6 + riverside * 0.8) * 0.5;
         if (r0 > p + bushP) continue;
+        if (this.plantings.some((q) => (q.x - x) ** 2 + (q.z - z) ** 2 < 900)) continue;
         if (roadAt(x, z) > 0.02 || settlementAt(x, z) > 0.1 || wd < 11) continue;
         const de = Math.hypot(x - EMBERHOLD_SITE.x, z - EMBERHOLD_SITE.z);
         if (de < EMBERHOLD_SITE.radius + 60) continue;

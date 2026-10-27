@@ -24,7 +24,7 @@ export interface BoxCollider { kind: 'box'; x: number; y: number; z: number; hx:
 export interface CylCollider { kind: 'cyl'; x: number; y: number; z: number; r: number; hh: number }
 export type Collider = BoxCollider | CylCollider;
 
-export type Bucket = 'stone' | 'plaster' | 'roofTile' | 'roofSlate' | 'timber' | 'window' | 'door' | 'iron' | 'monolith';
+export type Bucket = 'stone' | 'plaster' | 'roofTile' | 'roofSlate' | 'timber' | 'window' | 'door' | 'iron' | 'monolith' | 'cloth' | 'thatch';
 
 const SOUTH = Math.atan2(462, 30);   // angle of the south gate from the centre
 const NORTH = Math.atan2(-470, -30); // and the north gate
@@ -152,11 +152,34 @@ function monolithMaterial() {
   return m;
 }
 
+/** Market awnings: striped, faded cloth in a few dyes, keyed per stall. */
+function clothMaterial() {
+  const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.95, side: THREE.DoubleSide });
+  const p = positionWorld;
+  const id = hash(uint(floor(p.x.div(5.0)).add(3000.0)).mul(uint(73856093)).bitXor(uint(floor(p.z.div(5.0)).add(3000.0)).mul(uint(19349663))));
+  const dye = mix(mix(color(0x7a2f24), color(0x2f4a5e), step(0.33, id)), color(0x8a7a2e), step(0.66, id));
+  const stripe = step(0.5, fract(p.x.add(p.z).mul(1.6)));
+  m.colorNode = mix(dye, color(0xcfc4ab), stripe.mul(0.8)).mul(mx_noise_float(p.mul(1.3)).mul(0.08).add(0.92));
+  return m;
+}
+
+/** Thatch: straw reed bundles, darker and mossy with age. */
+function thatchMaterial() {
+  const m = new THREE.MeshStandardNodeMaterial({ roughness: 1 });
+  const p = positionWorld;
+  const straw = mx_noise_float(vec3(p.x.mul(9.0), p.y.mul(1.5), p.z.mul(9.0))).mul(0.5).add(0.5);
+  const age = mx_noise_float(p.mul(0.2)).mul(0.5).add(0.5);
+  m.colorNode = mix(mix(color(0x8a7650), color(0x6b5a3c), straw), color(0x4f4a30), age.mul(0.5));
+  m.normalNode = bumpFromHeight(straw.mul(0.02));
+  return m;
+}
+
 /** The shared set of building materials (Emberhold, Quillhaven, bridges). */
 export function buildingMaterials(night: any): Record<Bucket, THREE.Material> {
   return {
     stone: stoneMaterial(), plaster: plasterMaterial(), roofTile: roofMaterial('tile'), roofSlate: roofMaterial('slate'),
     timber: timberMaterial(), window: windowMaterial(night), door: doorMaterial(), iron: ironMaterial(), monolith: monolithMaterial(),
+    cloth: clothMaterial(), thatch: thatchMaterial(),
   };
 }
 
@@ -167,7 +190,7 @@ function ironMaterial() {
 // ------------------------------------------------------------------ geometry helpers
 export class Builder {
   buckets: Record<Bucket, THREE.BufferGeometry[]> = {
-    stone: [], plaster: [], roofTile: [], roofSlate: [], timber: [], window: [], door: [], iron: [], monolith: [],
+    stone: [], plaster: [], roofTile: [], roofSlate: [], timber: [], window: [], door: [], iron: [], monolith: [], cloth: [], thatch: [],
   };
   colliders: Collider[] = [];
 
@@ -243,6 +266,95 @@ export class Builder {
     return group;
   }
 }
+
+export interface HouseOpts { timber?: boolean; roof?: 'roofTile' | 'roofSlate' | 'thatch'; chimney?: boolean; stone?: boolean; forge?: boolean; doorSide?: number }
+
+/** A house: walls on a stone footing, timber framing, door, shuttered windows, roof and chimney. */
+export function buildHouse(b: Builder, ground: (x: number, z: number) => number, chimneys: SmokeEmitter[],
+x: number, z: number, rot: number, w: number, d: number, h: number, rand: () => number, opts: HouseOpts = {}) {
+  // Sit on the lowest corner so nothing floats on the terraces' slopes.
+  const c = Math.cos(rot), s = Math.sin(rot);
+  const P = (u: number, v: number): [number, number] => [x + u * c + v * s, z - u * s + v * c];
+  const corners = [[-w / 2, -d / 2], [w / 2, -d / 2], [-w / 2, d / 2], [w / 2, d / 2]].map(([u, v]) => ground(...P(u, v)));
+  const y = Math.min(...corners) - 0.6;
+  const fy = Math.max(...corners);
+  let top = fy + h;
+  const stone = !!opts.stone;
+  const floors = Math.max(1, Math.floor(h / 3.1));
+  // Timber houses with two floors or more often jetty the upper storey out over the street.
+  const jetty = !stone && opts.timber && floors >= 2 && rand() < 0.6 ? 0.45 : 0;
+  const groundTop = jetty ? fy + 3.1 : top;
+  b.box(stone ? 'stone' : 'plaster', w, groundTop - y, d, x, y, z, rot);
+  if (!stone) b.box('stone', w + 0.12, fy + 0.7 - y, d + 0.12, x, y, z, rot, false); // stone footing
+  let W = w, D = d;
+  if (jetty) {
+    W = w + jetty * 2; D = d + jetty * 2;
+    b.box('timber', W + 0.1, 0.3, D + 0.1, x, groundTop - 0.15, z, rot, false);
+    b.box('plaster', W, top - groundTop, D, x, groundTop, z, rot, false);
+  }
+  // Timber framing: posts, a rail at each floor and braces on the long walls.
+  if (opts.timber && !stone) {
+    const posts = Math.max(2, Math.round(W / 2.0));
+    for (let k = 0; k <= posts; k++) {
+      const u = -W / 2 + (k / posts) * W;
+      const y0 = jetty ? groundTop : fy + 0.7;
+      for (const v of [-D / 2 - 0.06, D / 2 + 0.06]) {
+        const [px, pz] = P(u, v);
+        b.box('timber', 0.2, top - y0, 0.12, px, y0, pz, rot, false);
+      }
+    }
+    for (let f = 1; f < floors; f++) {
+      for (const v of [-D / 2 - 0.07, D / 2 + 0.07]) {
+        const [px, pz] = P(0, v);
+        b.box('timber', W, 0.2, 0.14, px, fy + f * 3.1 - 0.1, pz, rot, false);
+      }
+    }
+    for (const v of [-D / 2 - 0.07, D / 2 + 0.07]) {
+      const [px, pz] = P(0, v);
+      b.box('timber', W, 0.2, 0.14, px, top - 0.2, pz, rot, false);
+    }
+  }
+  // Door on the front (the side facing +v), with a stone step.
+  {
+    const [dx, dz] = P((rand() - 0.5) * w * 0.3, d / 2 + 0.05);
+    b.box('door', 1.25, 2.2, 0.12, dx, fy, dz, rot, false);
+    b.box('timber', 1.6, 0.22, 0.2, dx, fy + 2.2, dz, rot, false);
+  }
+  // Windows with open shutters on both long sides.
+  const nwin = Math.max(1, Math.floor(w / 3.2));
+  for (let f = 0; f < floors; f++) {
+    const ww = f === 0 ? w : W, dd = f === 0 ? d : D;
+    for (let k = 0; k < nwin; k++) {
+      const u = -ww / 2 + (k + 0.5) * (ww / nwin);
+      if (f === 0 && Math.abs(u) < 1.6) continue;
+      for (const v of [dd / 2 + 0.06, -dd / 2 - 0.06]) {
+        if (rand() < 0.18) continue;
+        const wy = fy + 1.0 + f * 3.1;
+        const [wx, wz] = P(u, v);
+        b.box('window', 0.75, 1.05, 0.1, wx, wy, wz, rot, false);
+        if (!stone || rand() < 0.5) {
+          const sv = v > 0 ? 0.1 : -0.1;
+          for (const side of [-1, 1]) {
+            const [sx, sz] = P(u + side * 0.62, v + sv);
+            b.box('timber', 0.42, 1.1, 0.05, sx, wy - 0.02, sz, rot, false);
+          }
+        }
+        b.box(stone ? 'stone' : 'timber', 0.95, 0.12, 0.22, wx, wy - 0.12, wz, rot, false); // sill
+      }
+    }
+  }
+  const thatch = opts.roof === 'thatch';
+  const roofH = Math.min(W, D) * (thatch ? 0.7 + rand() * 0.1 : 0.42 + rand() * 0.18);
+  b.gable(opts.roof ?? 'roofTile', W, D, roofH, x, top, z, rot, thatch ? 0.75 : 0.45);
+  if (opts.chimney) {
+    const u = W * (rand() < 0.5 ? 0.3 : -0.3);
+    const [cx, cz] = P(u, (rand() - 0.5) * D * 0.3);
+    b.box('stone', 0.9, roofH + 1.6, 0.9, cx, top, cz, rot);
+    b.box('stone', 1.1, 0.25, 1.1, cx, top + roofH + 1.6, cz, rot, false);
+    if (opts.forge || rand() < 0.04) chimneys.push({ x: cx, y: top + roofH + 1.9, z: cz, strength: opts.forge ? 1.4 : 0.45 });
+  }
+}
+
 
 // ------------------------------------------------------------------ the fort
 export class Emberhold {
@@ -396,88 +508,8 @@ export class Emberhold {
   }
 
   /** A house: walls, door, windows, roof and maybe a chimney. */
-  private house(x: number, z: number, rot: number, w: number, d: number, h: number, rand: () => number, opts: { timber?: boolean; roof?: 'roofTile' | 'roofSlate'; chimney?: boolean; stone?: boolean; forge?: boolean } = {}) {
-    const b = this.b;
-    // Sit on the lowest corner so nothing floats on the terraces' slopes.
-    const c = Math.cos(rot), s = Math.sin(rot);
-    const P = (u: number, v: number): [number, number] => [x + u * c + v * s, z - u * s + v * c];
-    const corners = [[-w / 2, -d / 2], [w / 2, -d / 2], [-w / 2, d / 2], [w / 2, d / 2]].map(([u, v]) => this.ground(...P(u, v)));
-    const y = Math.min(...corners) - 0.6;
-    const fy = Math.max(...corners);
-    let top = fy + h;
-    const stone = !!opts.stone;
-    const floors = Math.max(1, Math.floor(h / 3.1));
-    // Timber houses with two floors or more often jetty the upper storey out over the street.
-    const jetty = !stone && opts.timber && floors >= 2 && rand() < 0.6 ? 0.45 : 0;
-    const groundTop = jetty ? fy + 3.1 : top;
-    b.box(stone ? 'stone' : 'plaster', w, groundTop - y, d, x, y, z, rot);
-    if (!stone) b.box('stone', w + 0.12, fy + 0.7 - y, d + 0.12, x, y, z, rot, false); // stone footing
-    let W = w, D = d;
-    if (jetty) {
-      W = w + jetty * 2; D = d + jetty * 2;
-      b.box('timber', W + 0.1, 0.3, D + 0.1, x, groundTop - 0.15, z, rot, false);
-      b.box('plaster', W, top - groundTop, D, x, groundTop, z, rot, false);
-    }
-    // Timber framing: posts, a rail at each floor and braces on the long walls.
-    if (opts.timber && !stone) {
-      const posts = Math.max(2, Math.round(W / 2.0));
-      for (let k = 0; k <= posts; k++) {
-        const u = -W / 2 + (k / posts) * W;
-        const y0 = jetty ? groundTop : fy + 0.7;
-        for (const v of [-D / 2 - 0.06, D / 2 + 0.06]) {
-          const [px, pz] = P(u, v);
-          b.box('timber', 0.2, top - y0, 0.12, px, y0, pz, rot, false);
-        }
-      }
-      for (let f = 1; f < floors; f++) {
-        for (const v of [-D / 2 - 0.07, D / 2 + 0.07]) {
-          const [px, pz] = P(0, v);
-          b.box('timber', W, 0.2, 0.14, px, fy + f * 3.1 - 0.1, pz, rot, false);
-        }
-      }
-      for (const v of [-D / 2 - 0.07, D / 2 + 0.07]) {
-        const [px, pz] = P(0, v);
-        b.box('timber', W, 0.2, 0.14, px, top - 0.2, pz, rot, false);
-      }
-    }
-    // Door on the front (the side facing +v), with a stone step.
-    {
-      const [dx, dz] = P((rand() - 0.5) * w * 0.3, d / 2 + 0.05);
-      b.box('door', 1.25, 2.2, 0.12, dx, fy, dz, rot, false);
-      b.box('timber', 1.6, 0.22, 0.2, dx, fy + 2.2, dz, rot, false);
-    }
-    // Windows with open shutters on both long sides.
-    const nwin = Math.max(1, Math.floor(w / 3.2));
-    for (let f = 0; f < floors; f++) {
-      const ww = f === 0 ? w : W, dd = f === 0 ? d : D;
-      for (let k = 0; k < nwin; k++) {
-        const u = -ww / 2 + (k + 0.5) * (ww / nwin);
-        if (f === 0 && Math.abs(u) < 1.6) continue;
-        for (const v of [dd / 2 + 0.06, -dd / 2 - 0.06]) {
-          if (rand() < 0.18) continue;
-          const wy = fy + 1.0 + f * 3.1;
-          const [wx, wz] = P(u, v);
-          b.box('window', 0.75, 1.05, 0.1, wx, wy, wz, rot, false);
-          if (!stone || rand() < 0.5) {
-            const sv = v > 0 ? 0.1 : -0.1;
-            for (const side of [-1, 1]) {
-              const [sx, sz] = P(u + side * 0.62, v + sv);
-              b.box('timber', 0.42, 1.1, 0.05, sx, wy - 0.02, sz, rot, false);
-            }
-          }
-          b.box(stone ? 'stone' : 'timber', 0.95, 0.12, 0.22, wx, wy - 0.12, wz, rot, false); // sill
-        }
-      }
-    }
-    const roofH = Math.min(W, D) * (0.42 + rand() * 0.18);
-    b.gable(opts.roof ?? 'roofTile', W, D, roofH, x, top, z, rot, 0.45);
-    if (opts.chimney) {
-      const u = W * (rand() < 0.5 ? 0.3 : -0.3);
-      const [cx, cz] = P(u, (rand() - 0.5) * D * 0.3);
-      b.box('stone', 0.9, roofH + 1.6, 0.9, cx, top, cz, rot);
-      b.box('stone', 1.1, 0.25, 1.1, cx, top + roofH + 1.6, cz, rot, false);
-      if (opts.forge || rand() < 0.04) this.chimneys.push({ x: cx, y: top + roofH + 1.9, z: cz, strength: opts.forge ? 1.4 : 0.45 });
-    }
+  private house(x: number, z: number, rot: number, w: number, d: number, h: number, rand: () => number, opts: HouseOpts = {}) {
+    buildHouse(this.b, (px, pz) => this.ground(px, pz), this.chimneys, x, z, rot, w, d, h, rand, opts);
   }
 
   private lowerYard(rand: () => number, at: (a: number, r: number) => THREE.Vector2) {

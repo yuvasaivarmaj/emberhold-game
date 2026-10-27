@@ -5,9 +5,9 @@ import * as THREE from 'three/webgpu';
 import {
   Fn, float, vec2, vec3, vec4, color, mix, smoothstep, clamp, max, texture, fract, abs,
   positionWorld, normalWorld, normalView, positionView, cameraPosition,
-  mx_noise_float, mx_fractal_noise_float, atan, sin, floor, hash, uint,
+  mx_noise_float, mx_fractal_noise_float, atan, sin, floor, hash, uint, uniform,
 } from 'three/tsl';
-import { WATER_LEVEL, WORLD_HALF, WORLD_SIZE, EMBERHOLD } from './Layout';
+import { WATER_LEVEL, WORLD_HALF, WORLD_SIZE, EMBERHOLD, QUILLHAVEN } from './Layout';
 import type { Heightfield } from './Heightfield';
 
 // Palette (sRGB hex; three converts to linear).
@@ -35,6 +35,9 @@ export const PAL = {
 };
 
 const W = float(WATER_LEVEL);
+
+/** 1 in the story's present; 0 in the opening film, before anyone farmed or built here. */
+export const uBuilt = uniform(1);
 
 /** Masks: [road, settlement, forest, water distance/255] and [wheat, barley, flax, vineyard]. */
 let maskTex: THREE.Texture | null = null;
@@ -82,8 +85,12 @@ export const fortZone = Fn(([xz]: any) => {
   const summit = summitAll.mul(court);
   const lower = smoothstep(middleR + 18, middleR + 26, r).mul(smoothstep(outerR + 6, outerR, r));
   const inside = smoothstep(outerR + 30, outerR + 20, r);
-  const lawn = inside.sub(summit).sub(lower).max(0.0);
-  return vec3(summit, lawn, lower);
+  const fortLawn = inside.sub(summit).sub(lower).max(0.0);
+  // Quillhaven: grass between the houses, worn to earth in patches.
+  const dq = xz.sub(vec2(QUILLHAVEN.x, QUILLHAVEN.z)).length();
+  const worn = smoothstep(0.45, 0.65, mx_noise_float(xz.mul(0.045)).mul(0.5).add(0.5));
+  const villageLawn = smoothstep(QUILLHAVEN.r + 25, QUILLHAVEN.r, dq).mul(float(1).sub(worn));
+  return vec3(summit, fortLawn.max(villageLawn), lower).mul(uBuilt);
 });
 
 const crisp = (m: any, xz: any) => smoothstep(0.42, 0.58, m.add(mx_noise_float(xz.mul(0.35)).mul(0.12)));
@@ -99,10 +106,10 @@ export const grassField = Fn(([xz, slopeY, h]: any) => {
   const j = mx_noise_float(xz.mul(0.9));
   const lm = landMask(xz);
   const cm = cropMask(xz);
-  const road = smoothstep(0.25, 0.6, lm.x);
-  const settle = crisp(lm.y, xz);
+  const road = smoothstep(0.25, 0.6, lm.x).mul(uBuilt);
+  const settle = crisp(lm.y, xz).mul(uBuilt);
   const forest = lm.z;
-  const wheat = crisp(cm.x, xz), barley = crisp(cm.y, xz), flax = crisp(cm.z, xz), vine = crisp(cm.w, xz);
+  const wheat = crisp(cm.x, xz).mul(uBuilt), barley = crisp(cm.y, xz).mul(uBuilt), flax = crisp(cm.z, xz).mul(uBuilt), vine = crisp(cm.w, xz).mul(uBuilt);
   const crop = clamp(wheat.add(barley).add(flax), 0.0, 1.0);
   const rockW = rockWeight(slopeY, j);
   const bankW = bankWeight(h, j);
@@ -174,10 +181,10 @@ export function createTerrainMaterial(hf: Heightfield): THREE.MeshStandardNodeMa
   const fine = mx_noise_float(xz.mul(4.3));
   const lm = landMask(xz);
   const cm = cropMask(xz);
-  const road = smoothstep(0.2, 0.65, lm.x.add(micro.mul(0.08)));
-  const settle = crisp(lm.y, xz);
+  const road = smoothstep(0.2, 0.65, lm.x.add(micro.mul(0.08))).mul(uBuilt);
+  const settle = crisp(lm.y, xz).mul(uBuilt);
   const forest = lm.z;
-  const wheat = crisp(cm.x, xz), barley = crisp(cm.y, xz), flax = crisp(cm.z, xz), vine = crisp(cm.w, xz);
+  const wheat = crisp(cm.x, xz).mul(uBuilt), barley = crisp(cm.y, xz).mul(uBuilt), flax = crisp(cm.z, xz).mul(uBuilt), vine = crisp(cm.w, xz).mul(uBuilt);
   const crop = clamp(wheat.add(barley).add(flax), 0.0, 1.0);
   const kind = wheat.mul(1.0).add(barley.mul(2.0)).add(flax.mul(3.0));
 

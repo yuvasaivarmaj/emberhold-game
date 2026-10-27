@@ -196,6 +196,36 @@ export class GameAudio {
     }
   }
 
+  /** A hoofbeat: a heavy thud and, on stone or packed road, a sharp clop. */
+  hoof(surface: Surface, intensity: number, pan = 0) {
+    const ctx = this.ctx;
+    if (!ctx || ctx.state !== 'running' || intensity < 0.01) return;
+    const t = ctx.currentTime + Math.random() * 0.01;
+    const o = ctx.createOscillator();
+    o.frequency.setValueAtTime(70 + Math.random() * 15, t);
+    o.frequency.exponentialRampToValueAtTime(34, t + 0.12);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.32 * intensity, t);
+    og.gain.exponentialRampToValueAtTime(0.001, t + 0.14);
+    const pn = ctx.createStereoPanner(); pn.pan.value = pan;
+    o.connect(og).connect(pn).connect(this.master);
+    o.start(t); o.stop(t + 0.16);
+    const src = ctx.createBufferSource();
+    src.buffer = this.white;
+    const f = ctx.createBiquadFilter();
+    const g = ctx.createGain();
+    const hard = surface === 'rock';
+    f.type = 'bandpass';
+    f.frequency.value = hard ? 1100 + Math.random() * 400 : surface === 'water' ? 900 : 380 + Math.random() * 120;
+    f.Q.value = hard ? 2.5 : 0.8;
+    const dur = hard ? 0.06 : surface === 'water' ? 0.25 : 0.11;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime((hard ? 0.5 : 0.22) * intensity, t + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(f).connect(g).connect(pn);
+    src.start(t, Math.random() * 1.5, dur + 0.05);
+  }
+
   landed(impact: number, surface: Surface) {
     this.footstep(surface, Math.min(1.6, impact / 4));
     setTimeout(() => this.footstep(surface, Math.min(1.2, impact / 6)), 60);

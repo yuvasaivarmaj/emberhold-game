@@ -148,6 +148,20 @@ export class Viewmodel {
     return { root, hand, joints, thumb, side };
   }
 
+  /** Set while in the saddle; rideBob is the horse's vertical motion for the hands. */
+  riding = false;
+  rideBob = 0;
+  private rideBlend = 0;
+
+  /** World positions of the two fists (for the reins). */
+  grips(out: THREE.Vector3[]) {
+    this.arms.forEach((a, i) => {
+      a.hand.updateWorldMatrix(true, false);
+      out[i].set(0, -0.02, 0.06).applyMatrix4(a.hand.matrixWorld);
+    });
+    return out;
+  }
+
   update(dt: number, p: Player, mouseDX: number, mouseDY: number) {
     this.rig.visible = this.visible;
     if (!this.visible) return;
@@ -160,6 +174,7 @@ export class Viewmodel {
     this.swim += ((p.swimming ? 1 : 0) - this.swim) * k(4);
     this.air += ((!p.grounded && !p.swimming ? 1 : 0) - this.air) * k(8);
     this.sprintBlend += ((p.sprinting && p.speed > 3.5 ? 1 : 0) - this.sprintBlend) * k(6);
+    this.rideBlend += ((this.riding ? 1 : 0) - this.rideBlend) * k(5);
     const moving = Math.min(1, p.speed / 2.5);
     const breath = Math.sin(this.t * 1.7) * 0.0035;
 
@@ -188,14 +203,28 @@ export class Viewmodel {
         rx = THREE.MathUtils.lerp(rx, 0.15, this.swim);
         ry = THREE.MathUtils.lerp(ry, 0.1 + sweep * 0.4, this.swim);
       }
+      // Riding: both hands low and forward over the withers, holding the reins.
+      if (this.rideBlend > 0.001) {
+        const rb = this.rideBlend;
+        const jog = this.rideBob * 0.6;
+        x = THREE.MathUtils.lerp(x, 0.1, rb);
+        y = THREE.MathUtils.lerp(y, -0.25 + jog, rb);
+        z = THREE.MathUtils.lerp(z, -0.4, rb);
+        rx = THREE.MathUtils.lerp(rx, 0.55, rb);
+        ry = THREE.MathUtils.lerp(ry, 0.05, rb);
+        rz = THREE.MathUtils.lerp(rz, 0.1, rb);
+      }
       a.root.position.set(x * s, y, z);
       a.root.rotation.set(rx, ry, rz); // the left arm is mirrored by its negative x scale
 
       // Hand: fingers forward and a little down, palm turned in toward the body.
-      a.hand.rotation.set(-0.62 - this.sprintBlend * 0.2 + this.swim * 0.4, 0.18, -0.62 + this.swim * 0.5);
+      a.hand.rotation.set(
+        THREE.MathUtils.lerp(-0.62 - this.sprintBlend * 0.2 + this.swim * 0.4, -0.15, this.rideBlend),
+        THREE.MathUtils.lerp(0.18, 0.0, this.rideBlend),
+        THREE.MathUtils.lerp(-0.62 + this.swim * 0.5, -1.25, this.rideBlend));
 
       // Fingers rest loosely curled; tighten into a loose fist when running.
-      const fist = this.sprintBlend * 0.9;
+      const fist = Math.max(this.sprintBlend * 0.9, this.rideBlend * 1.1);
       const idle = Math.sin(this.t * 0.6 + s) * 0.04;
       a.joints.forEach((chain, i) => {
         const c = FINGERS[i].curl;

@@ -17,9 +17,10 @@ Works best in a recent Chrome or Edge, which use WebGPU. Other browsers fall bac
 | --- | --- |
 | W A S D / arrows | Move |
 | Mouse | Look |
-| Shift | Run |
+| Shift | Run (on horseback: canter, then gallop) |
 | Space | Jump |
-| C or Ctrl | Crouch |
+| C or Ctrl | Crouch (on horseback: keep to a walk) |
+| E | Mount or dismount a horse |
 | Hold T | Let time pass quickly |
 | F3 | Frame rate and position |
 | Esc | Menu and settings |
@@ -29,6 +30,8 @@ Works best in a recent Chrome or Edge, which use WebGPU. Other browsers fall bac
 - **Opening film:** a narrated, subtitled cinematic (Aethryn, the departure, the crossing, the fall out of Scorpius, the wreck at dawn). Hold Space to skip.
 - **The Verdance:** an 8 × 8 km baked map with the Silverrun, Quill Brook and Ember Brook, roads, stone bridges, farm parcels of wheat, barley and flax, vineyards, horse pastures, the charcoal woods, oak forest, a lake, high mountains to the north and west, and the outer watchstones on the south road.
 - **Emberhold:** three ring walls of pale stone banded with dark fused brick, with towers and gatehouses. The great blackwood gates open on the lower yard, a town of smithies, stables, granary towers, barracks and houses. Above it are the middle courts with the halls of the sworn households and the rookery tower. On the summit stand the Hall of Cinders, the keep, the family and nursery wings, the forge hall with its smoking stack, and the vault stair. Windows light up after dark.
+- **Quillhaven:** the leaning square tower of House Quillayne with its three additions and two weak walls, the rookery larger than the chapel, the chapel's crooked bell, the market green with its stalls and well, the Green Perch (with its sign), the counting hall, the granary on staddle stones, the scribe-house, saddle-house and west store, the mill with its turning wheel on the Quill Brook, the north bridge and its bell, rooks wheeling over the old elms, and the old banyan with its hanging roots outside the village.
+- **Horses:** procedural horses with jointed legs and real gaits (walk, trot, canter, gallop), grazing and wandering in the Maegyr horse fields east of Emberhold, tied by the stables and the Green Perch. Ilyan's own horse, Ashfoot, waits by the south road. Ride any saddled or unsaddled horse with **E**: W to trot, Shift to canter and then gallop, Ctrl to keep to a walk, S to rein in, A and D to turn. You see the neck and ears ahead and your hands on the reins, and you hear the hoofbeats change from grass to road.
 - **Night sky:** 8,700 real stars from the Yale Bright Star Catalogue, turning with sidereal time, plus the Milky Way, a phased moon and Scorpius picked out.
 - **Lighting:** cascaded sun and moon shadows, image-based light from the sky, bloom and filmic tone mapping.
 - **Grass, trees, rocks and water:** GPU grass that follows the fields and crops, about a dozen tree species with three levels of detail, boulders, and refracting rivers.
@@ -68,7 +71,7 @@ The map is baked by `tools/bake-world.ts` into `public/data/` (run automatically
 
 1. **Foundation:** world, sky, lighting, movement, settings. *Done.*
 2. **The Verdance and Emberhold:** the 8 km region, the fort and its rings, the opening film, saving. *Done; interiors to come.*
-3. **Quillhaven and horses:** the village on the brown-green bend, the banyan, and riding.
+3. **Quillhaven and horses:** the village on the brown-green bend, the banyan, and riding. *Done.*
 4. **Living world:** people with daily routines, conversations, interaction and objectives.
 5. **Vertical slice:** Ilyan's first chapter, playable from start to finish.
 6. **Expansion:** the later chapters and switching between characters.

@@ -119,3 +119,7 @@ input[type=checkbox] { accent-color: var(--ember); width: 18px; height: 18px; }
 #skip.active { opacity: 1; }
 .skip-bar { margin-top: 6px; height: 2px; background: rgba(236,228,214,0.15); }
 #skip-fill { width: 0%; height: 100%; background: var(--ember); }
+
+.prompt { position: absolute; top: 58%; left: 50%; transform: translateX(-50%); font-size: 15px; letter-spacing: 0.04em; color: #ece4d6; text-shadow: 0 1px 6px #000; opacity: 0; transition: opacity 0.25s; pointer-events: none; white-space: nowrap; }
+.prompt.on { opacity: 1; }
+.prompt kbd { margin-right: 6px; }

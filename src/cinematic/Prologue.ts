@@ -6,6 +6,7 @@ import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { SpaceScene } from './SpaceScene';
 import { Narrator } from './Narrator';
 import { Music } from './Music';
+import { uBuilt } from '../world/TerrainShading';
 import { Fireball, Plume, ScorpiusLines, makeWreck, makeScorch, updateCamAxes, ANTARES } from './Effects';
 import type { Game } from '../core/Game';
 import { EMBERHOLD_SITE, SPAWN } from '../world/WorldConfig';
@@ -72,6 +73,8 @@ export class Prologue {
     this.fireball.reset();
     g.hands.visible = false;
     g.hands.rig.visible = false;
+    // The night of the fall came long before anyone built on the hill.
+    this.setBuilt(false);
     g.scene.add(this.fireball.group, this.plume.group, this.lines.mesh);
     const site = new THREE.Vector3(EMBERHOLD_SITE.x, g.hf.height(EMBERHOLD_SITE.x, EMBERHOLD_SITE.z), EMBERHOLD_SITE.z);
     this.wreck = makeWreck(g.hf, site);
@@ -169,6 +172,13 @@ export class Prologue {
     }
   }
 
+  /** Show or hide everything people built later: Emberhold, Quillhaven, bridges, horses. */
+  private setBuilt(on: boolean) {
+    const g = this.game;
+    for (const o of [g.emberhold?.group, g.structures?.group, g.quillhaven?.group, g.horses?.group]) if (o) o.visible = on;
+    uBuilt.value = on ? 1 : 0;
+  }
+
   private finish() {
     if (!this.running) return;
     this.running = false;
@@ -177,6 +187,7 @@ export class Prologue {
     this.music?.fadeOut(3);
     g.audio.setAmbience(1, 3);
     for (const o of [this.fireball.group, this.plume.group, this.lines.mesh, this.wreck!, this.scorch!]) g.scene.remove(o);
+    this.setBuilt(true);
     g.sky.stars && (g.sky.stars.uScorpio.value = 0);
     this.el.root.hidden = true;
     this.el.title.classList.remove('show');
