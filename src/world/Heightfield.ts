@@ -32,15 +32,21 @@ export class Heightfield {
       if (!res.ok) throw new Error(`Couldn't load the world map (${file}). Run npm run bake.`);
       const total = +(res.headers.get('content-length') ?? 0);
       if (!res.body || !total) { const b = await res.arrayBuffer(); onProgress(done + weight); return b; }
+      // Servers that compress the file (GitHub Pages does) report the compressed size,
+      // so collect the chunks as they come and only use the size for the progress bar.
       const reader = res.body.getReader();
-      const out = new Uint8Array(total);
+      const chunks: Uint8Array[] = [];
       let got = 0;
       for (;;) {
         const { done: end, value } = await reader.read();
         if (end) break;
-        out.set(value, got); got += value.length;
-        onProgress(done + weight * (got / total));
+        chunks.push(value); got += value.length;
+        onProgress(done + weight * Math.min(1, got / total));
       }
+      const out = new Uint8Array(got);
+      let o = 0;
+      for (const c of chunks) { out.set(c, o); o += c.length; }
+      onProgress(done + weight);
       return out.buffer;
     };
     const meta = await (await fetch(new URL('./data/verdance.json', base).toString())).json();
