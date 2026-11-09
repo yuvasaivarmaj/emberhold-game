@@ -264,10 +264,10 @@ export class Builder {
   }
 
   /**
-   * Merge by material and by ~200 m square, so the camera and each shadow cascade only draw
+   * Merge by material and by ~400 m square, so the camera and each shadow cascade only draw
    * the parts of the fort they can see.
    */
-  merge(materials: Record<Bucket, THREE.Material>, chunk = 200) {
+  merge(materials: Record<Bucket, THREE.Material>, chunk = 400) {
     const group = new THREE.Group();
     const v = new THREE.Vector3();
     for (const k of Object.keys(this.buckets) as Bucket[]) {
