@@ -83,6 +83,7 @@ export class Physics {
       if (c.kind === 'box') {
         this.register(c.x, c.z, () => {
           q.setFromAxisAngle(up, c.rotY);
+          if (c.rotX) q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), c.rotX));
           return RAPIER.ColliderDesc.cuboid(c.hx, c.hy, c.hz).setTranslation(c.x, c.y, c.z).setRotation({ x: q.x, y: q.y, z: q.z, w: q.w });
         });
       } else {

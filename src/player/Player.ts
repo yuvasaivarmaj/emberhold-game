@@ -67,6 +67,8 @@ export class Player {
   swimPhase = 0;
   speed = 0;
   surface: Surface = 'grass';
+  /** Indoors (or anywhere special), what's underfoot; null to work it out from the ground. */
+  surfaceHint: ((x: number, y: number, z: number) => Surface | null) | null = null;
 
   constructor(private physics: Physics, private hf: Heightfield, start: { x: number; z: number; yaw: number }, camera: THREE.PerspectiveCamera) {
     this.camera = camera;
@@ -281,7 +283,9 @@ export class Player {
     const n = this.hf.normal(this.feet.x, this.feet.z);
     const fx = this.feet.x, fz = this.feet.z;
     const onBuilt = this.feet.y > gh + 0.25; // standing on a wall, a step, a bridge or a rock
-    if (this.feet.y < WATER_LEVEL + 0.04) this.surface = 'water';
+    const hint = this.surfaceHint?.(fx, this.feet.y, fz) ?? null;
+    if (hint) this.surface = hint;
+    else if (this.feet.y < WATER_LEVEL + 0.04) this.surface = 'water';
     else if (onBuilt) this.surface = settlementAt(fx, fz) > 0.3 || roadAt(fx, fz) > 0.3 ? 'stone' : 'rock';
     else if (roadAt(fx, fz) > 0.45) this.surface = settlementAt(fx, fz) > 0.5 && fortGround(fx, fz) === 'flags' ? 'stone' : 'gravel';
     else if (settlementAt(fx, fz) > 0.5) this.surface = fortGround(fx, fz) === 'flags' ? 'stone' : fortGround(fx, fz) === 'lawn' ? 'grass' : 'gravel';

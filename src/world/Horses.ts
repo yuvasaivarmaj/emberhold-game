@@ -524,7 +524,8 @@ export class Horses {
     let dx = f.x * h.speed * dt, dz = f.z * h.speed * dt;
     // Horses won't walk into deep water.
     const ahead = this.hf.height(h.x + f.x * 2.5 * Math.sign(h.speed || 1), h.z + f.z * 2.5 * Math.sign(h.speed || 1));
-    if (ahead < WATER_LEVEL - 1.3 && h.speed > 0) { dx = 0; dz = 0; h.speed *= 0.5; }
+    // (A horse up on a bridge deck is well above the river and walks on.)
+    if (ahead < WATER_LEVEL - 1.3 && h.speed > 0 && h.y < WATER_LEVEL + 1.5) { dx = 0; dz = 0; h.speed *= 0.5; }
     // Gravity and a modest jump.
     const grounded = this.controller!.computedGrounded();
     if (grounded) { this.vy = -1; if (keys.jump && h.speed > 2) this.vy = 4.6; }

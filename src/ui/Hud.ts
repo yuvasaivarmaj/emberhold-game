@@ -7,6 +7,8 @@ import {
 } from '../world/Layout';
 
 const MAP = 1024; // map canvas size (8 m per pixel)
+
+export interface HudExtras { horses?: { x: number; z: number }[]; target?: { x: number; z: number; label?: string } | null }
 const $ = (id: string) => document.getElementById(id)!;
 
 export class Hud {
@@ -138,7 +140,7 @@ export class Hud {
   private toMap(x: number, z: number) { return [((x + WORLD_HALF) / WORLD_SIZE) * MAP, ((z + WORLD_HALF) / WORLD_SIZE) * MAP]; }
 
   // ---------------------------------------------------------------- per frame
-  update(x: number, z: number, yaw: number, extras: { horses?: { x: number; z: number }[] } = {}) {
+  update(x: number, z: number, yaw: number, extras: HudExtras = {}) {
     // Minimap: the land around you, turning so that ahead is always up.
     const c = this.miniCtx, S = this.mini.width, R = S / 2;
     const [mx, mz] = this.toMap(x, z);
@@ -158,6 +160,23 @@ export class Hud {
       }
     }
     c.restore();
+    // Where the current objective is: a mark on the minimap, or a pointer on the rim.
+    if (extras.target) {
+      const [tx, tz] = this.toMap(extras.target.x, extras.target.z);
+      let dx = (tx - mx) * zoom, dz = (tz - mz) * zoom;
+      const ca = Math.cos(yaw), sa = Math.sin(yaw);
+      [dx, dz] = [dx * ca - dz * sa, dx * sa + dz * ca];
+      const d = Math.hypot(dx, dz);
+      c.fillStyle = '#c8461e'; c.strokeStyle = '#f3e7cf'; c.lineWidth = 1.5;
+      if (d < R - 14) {
+        c.beginPath(); c.arc(R + dx, R + dz, 5, 0, Math.PI * 2); c.fill(); c.stroke();
+      } else {
+        const ax = R + (dx / d) * (R - 10), az = R + (dz / d) * (R - 10), a = Math.atan2(dz, dx);
+        c.save(); c.translate(ax, az); c.rotate(a);
+        c.beginPath(); c.moveTo(6, 0); c.lineTo(-5, -5); c.lineTo(-5, 5); c.closePath(); c.fill(); c.stroke();
+        c.restore();
+      }
+    }
     // You: an arrow, pointing up.
     c.fillStyle = '#7a2414'; c.strokeStyle = '#f3e7cf'; c.lineWidth = 1.5;
     c.beginPath(); c.moveTo(R, R - 9); c.lineTo(R - 6, R + 7); c.lineTo(R, R + 3); c.lineTo(R + 6, R + 7); c.closePath(); c.fill(); c.stroke();
@@ -180,7 +199,7 @@ export class Hud {
   }
   onDiscover: ((name: string, sub: string) => void) | null = null;
 
-  private drawBig(x: number, z: number, yaw: number, extras: { horses?: { x: number; z: number }[] }) {
+  private drawBig(x: number, z: number, yaw: number, extras: HudExtras) {
     const cv = this.bigCtx.canvas;
     const size = Math.min(innerWidth, innerHeight) * 0.9;
     if (cv.width !== Math.round(size)) { cv.width = cv.height = Math.round(size); }
@@ -189,6 +208,15 @@ export class Hud {
     if (extras.horses) {
       c.fillStyle = 'rgba(70,40,20,0.8)';
       for (const h of extras.horses) { const [hx, hz] = this.toMap(h.x, h.z); c.beginPath(); c.arc(hx * k, hz * k, 2, 0, Math.PI * 2); c.fill(); }
+    }
+    if (extras.target) {
+      const [tx, tz] = this.toMap(extras.target.x, extras.target.z);
+      c.fillStyle = '#c8461e'; c.strokeStyle = '#f3e7cf'; c.lineWidth = 2;
+      c.beginPath(); c.arc(tx * k, tz * k, 6, 0, Math.PI * 2); c.fill(); c.stroke();
+      if (extras.target.label) {
+        c.font = 'italic 600 14px Georgia, serif'; c.fillStyle = '#3a2416'; c.textAlign = 'left'; c.textBaseline = 'middle';
+        c.fillText(extras.target.label, tx * k + 10, tz * k);
+      }
     }
     const [mx, mz] = this.toMap(x, z);
     c.save();

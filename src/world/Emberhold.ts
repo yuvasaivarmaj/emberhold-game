@@ -19,15 +19,19 @@ import { EMBERHOLD as E, fortShape } from './Layout';
 import { mulberry32 } from './Noise';
 import { bumpFromHeight } from './TerrainShading';
 import { Smoke, type SmokeEmitter } from './Smoke';
+import { buildFootprints } from './Footprints';
+import {
+  type HouseShape, type Building, type BuildingKind, type Ring, type Footprint, footprintsOverlap, KIND_NAMES,
+} from './Buildings';
 
-export interface BoxCollider { kind: 'box'; x: number; y: number; z: number; hx: number; hy: number; hz: number; rotY: number }
+export interface BoxCollider { kind: 'box'; x: number; y: number; z: number; hx: number; hy: number; hz: number; rotY: number; /** Tilt about the box's own x axis (ramps). */ rotX?: number }
 export interface CylCollider { kind: 'cyl'; x: number; y: number; z: number; r: number; hh: number }
 export type Collider = BoxCollider | CylCollider;
 
-export type Bucket = 'stone' | 'plaster' | 'roofTile' | 'roofSlate' | 'timber' | 'window' | 'door' | 'iron' | 'monolith' | 'cloth' | 'thatch';
+export type Bucket = 'stone' | 'plaster' | 'roofTile' | 'roofSlate' | 'timber' | 'window' | 'door' | 'iron' | 'monolith' | 'cloth' | 'thatch' | 'banner';
 
-const SOUTH = Math.atan2(462, 30);   // angle of the south gate from the centre
-const NORTH = Math.atan2(-470, -30); // and the north gate
+export const SOUTH = Math.atan2(462, 30);   // angle of the south gate from the centre
+export const NORTH = Math.atan2(-470, -30); // and the north gate
 
 function angDiff(a: number, b: number) {
   let d = a - b;
@@ -163,6 +167,16 @@ function clothMaterial() {
   return m;
 }
 
+/** The Vaelaros red: heavy woollen hangings, a little faded and weathered. */
+function bannerMaterial() {
+  const m = new THREE.MeshStandardNodeMaterial({ roughness: 0.95, side: THREE.DoubleSide });
+  const p = positionWorld;
+  const weave = mx_noise_float(vec3(p.x.mul(30.0), p.y.mul(30.0), p.z.mul(30.0))).mul(0.5).add(0.5);
+  const fade = mx_noise_float(p.mul(0.6)).mul(0.5).add(0.5);
+  m.colorNode = mix(color(0x7a1a14), color(0x9a2a1c), fade).mul(weave.mul(0.12).add(0.9));
+  return m;
+}
+
 /** Thatch: straw reed bundles, darker and mossy with age. */
 function thatchMaterial() {
   const m = new THREE.MeshStandardNodeMaterial({ roughness: 1 });
@@ -179,7 +193,7 @@ export function buildingMaterials(night: any): Record<Bucket, THREE.Material> {
   return {
     stone: stoneMaterial(), plaster: plasterMaterial(), roofTile: roofMaterial('tile'), roofSlate: roofMaterial('slate'),
     timber: timberMaterial(), window: windowMaterial(night), door: doorMaterial(), iron: ironMaterial(), monolith: monolithMaterial(),
-    cloth: clothMaterial(), thatch: thatchMaterial(),
+    cloth: clothMaterial(), thatch: thatchMaterial(), banner: bannerMaterial(),
   };
 }
 
@@ -190,7 +204,7 @@ function ironMaterial() {
 // ------------------------------------------------------------------ geometry helpers
 export class Builder {
   buckets: Record<Bucket, THREE.BufferGeometry[]> = {
-    stone: [], plaster: [], roofTile: [], roofSlate: [], timber: [], window: [], door: [], iron: [], monolith: [], cloth: [], thatch: [],
+    stone: [], plaster: [], roofTile: [], roofSlate: [], timber: [], window: [], door: [], iron: [], monolith: [], cloth: [], thatch: [], banner: [],
   };
   colliders: Collider[] = [];
 
@@ -267,11 +281,34 @@ export class Builder {
   }
 }
 
-export interface HouseOpts { timber?: boolean; roof?: 'roofTile' | 'roofSlate' | 'thatch'; chimney?: boolean; stone?: boolean; forge?: boolean; doorSide?: number }
+export interface HouseOpts {
+  timber?: boolean; roof?: 'roofTile' | 'roofSlate' | 'thatch'; chimney?: boolean; stone?: boolean; forge?: boolean; doorSide?: number;
+  /** Real walls with a doorway you can walk through, instead of a solid block. */
+  hollow?: boolean;
+}
+
+/** Four walls of thickness t around a w x d footprint from y0 to y1, with a doorway in the front (+v) wall. */
+function hollowWalls(b: Builder, bucket: Bucket, P: (u: number, v: number) => [number, number], rot: number,
+  w: number, d: number, t: number, y0: number, y1: number, door: { u: number; w: number; top: number } | null, collide = true) {
+  const H = y1 - y0;
+  if (H <= 0.01) return;
+  const put = (bw: number, bh: number, bd: number, u: number, v: number, by: number) => {
+    const [px, pz] = P(u, v);
+    b.box(bucket, bw, bh, bd, px, by, pz, rot, collide);
+  };
+  put(w, H, t, 0, -d / 2 + t / 2, y0);
+  for (const su of [-1, 1]) put(t, H, d - 2 * t, su * (w / 2 - t / 2), 0, y0);
+  const fv = d / 2 - t / 2;
+  if (!door) { put(w, H, t, 0, fv, y0); return; }
+  const l0 = -w / 2, l1 = door.u - door.w / 2, r0 = door.u + door.w / 2, r1 = w / 2;
+  if (l1 - l0 > 0.02) put(l1 - l0, H, t, (l0 + l1) / 2, fv, y0);
+  if (r1 - r0 > 0.02) put(r1 - r0, H, t, (r0 + r1) / 2, fv, y0);
+  if (y1 > door.top) put(door.w, y1 - door.top, t, door.u, fv, door.top);
+}
 
 /** A house: walls on a stone footing, timber framing, door, shuttered windows, roof and chimney. */
 export function buildHouse(b: Builder, ground: (x: number, z: number) => number, chimneys: SmokeEmitter[],
-x: number, z: number, rot: number, w: number, d: number, h: number, rand: () => number, opts: HouseOpts = {}) {
+x: number, z: number, rot: number, w: number, d: number, h: number, rand: () => number, opts: HouseOpts = {}): HouseShape {
   // Sit on the lowest corner so nothing floats on the terraces' slopes.
   const c = Math.cos(rot), s = Math.sin(rot);
   const P = (u: number, v: number): [number, number] => [x + u * c + v * s, z - u * s + v * c];
@@ -280,17 +317,51 @@ x: number, z: number, rot: number, w: number, d: number, h: number, rand: () => 
   const fy = Math.max(...corners);
   let top = fy + h;
   const stone = !!opts.stone;
+  const hollow = !!opts.hollow;
   const floors = Math.max(1, Math.floor(h / 3.1));
   // Timber houses with two floors or more often jetty the upper storey out over the street.
   const jetty = !stone && opts.timber && floors >= 2 && rand() < 0.6 ? 0.45 : 0;
   const groundTop = jetty ? fy + 3.1 : top;
-  b.box(stone ? 'stone' : 'plaster', w, groundTop - y, d, x, y, z, rot);
-  if (!stone) b.box('stone', w + 0.12, fy + 0.7 - y, d + 0.12, x, y, z, rot, false); // stone footing
+  // The doorway (drawn from the same random stream as before, so the town doesn't change).
+  const doorU = (rand() - 0.5) * w * 0.3;
+  const DW = 1.3, DH = 2.25;
+  const t = stone ? 0.55 : 0.3;
+  const wallB: Bucket = stone ? 'stone' : 'plaster';
+  if (!hollow) {
+    b.box(wallB, w, groundTop - y, d, x, y, z, rot);
+    if (!stone) b.box('stone', w + 0.12, fy + 0.7 - y, d + 0.12, x, y, z, rot, false); // stone footing
+  } else {
+    hollowWalls(b, wallB, P, rot, w, d, t, y, groundTop, { u: doorU, w: DW, top: fy + DH });
+    // The ground floor: a slab inside the walls, level with the threshold.
+    b.box('stone', w - 2 * t + 0.02, fy + 0.04 - y, d - 2 * t + 0.02, x, y, z, rot);
+    // Stone footing as a skirt around the outside, open at the door.
+    if (!stone) hollowWalls(b, 'stone', P, rot, w + 0.12, d + 0.12, 0.06 + 0.12, y, fy + 0.7, { u: doorU, w: DW, top: fy + 0.71 }, false);
+    // The threshold stone across the doorway, level with the floor.
+    {
+      const [tx, tz] = P(doorU, d / 2 - t / 2);
+      b.box('stone', DW + 0.02, fy + 0.04 - y, t + 0.02, tx, y, tz, rot);
+    }
+    // Steps up to the threshold where the street falls away from it: a stack of slabs,
+    // each a step lower and a tread further out.
+    const [ox, oz] = P(doorU, d / 2 + 0.9);
+    const g0 = ground(ox, oz);
+    const rise = fy + 0.04 - g0;
+    if (rise > 0.18) {
+      const n = Math.min(24, Math.ceil(rise / 0.2));
+      for (let k = 0; k < n; k++) {
+        const depth = 0.3 * (n - k);
+        const [sx, sz] = P(doorU, d / 2 + depth / 2);
+        const topK = g0 + ((k + 1) / n) * rise;
+        b.box('stone', DW + 0.4, topK - (g0 - 0.6), depth, sx, g0 - 0.6, sz, rot);
+      }
+    }
+  }
   let W = w, D = d;
   if (jetty) {
     W = w + jetty * 2; D = d + jetty * 2;
     b.box('timber', W + 0.1, 0.3, D + 0.1, x, groundTop - 0.15, z, rot, false);
-    b.box('plaster', W, top - groundTop, D, x, groundTop, z, rot, false);
+    if (hollow) hollowWalls(b, 'plaster', P, rot, W, D, 0.25, groundTop, top, null, true);
+    else b.box('plaster', W, top - groundTop, D, x, groundTop, z, rot, false);
   }
   // Timber framing: posts, a rail at each floor and braces on the long walls.
   if (opts.timber && !stone) {
@@ -299,8 +370,11 @@ x: number, z: number, rot: number, w: number, d: number, h: number, rand: () => 
       const u = -W / 2 + (k / posts) * W;
       const y0 = jetty ? groundTop : fy + 0.7;
       for (const v of [-D / 2 - 0.06, D / 2 + 0.06]) {
+        // Keep the doorway clear of the framing on the ground storey.
+        const inDoor = !jetty && v > 0 && Math.abs(u - doorU) < DW / 2 + 0.12;
         const [px, pz] = P(u, v);
-        b.box('timber', 0.2, top - y0, 0.12, px, y0, pz, rot, false);
+        if (inDoor) b.box('timber', 0.2, top - (fy + DH + 0.25), 0.12, px, fy + DH + 0.25, pz, rot, false);
+        else b.box('timber', 0.2, top - y0, 0.12, px, y0, pz, rot, false);
       }
     }
     for (let f = 1; f < floors; f++) {
@@ -314,12 +388,14 @@ x: number, z: number, rot: number, w: number, d: number, h: number, rand: () => 
       b.box('timber', W, 0.2, 0.14, px, top - 0.2, pz, rot, false);
     }
   }
-  // Door on the front (the side facing +v), with a stone step.
+  // Door on the front (the side facing +v). Hollow houses get a real, hinged door (Doors.ts)
+  // in the opening; the others keep a door panel on the wall.
   {
-    const [dx, dz] = P((rand() - 0.5) * w * 0.3, d / 2 + 0.05);
-    b.box('door', 1.25, 2.2, 0.12, dx, fy, dz, rot, false);
-    b.box('timber', 1.6, 0.22, 0.2, dx, fy + 2.2, dz, rot, false);
+    const [dx, dz] = P(doorU, d / 2 + 0.05);
+    if (!hollow) b.box('door', 1.25, 2.2, 0.12, dx, fy, dz, rot, false);
+    b.box('timber', 1.6, 0.22, 0.2, dx, fy + (hollow ? DH : 2.2), dz, rot, false);
   }
+  const windows: HouseShape['windows'] = [];
   // Windows with open shutters on both long sides.
   const nwin = Math.max(1, Math.floor(w / 3.2));
   for (let f = 0; f < floors; f++) {
@@ -332,6 +408,7 @@ x: number, z: number, rot: number, w: number, d: number, h: number, rand: () => 
         const wy = fy + 1.0 + f * 3.1;
         const [wx, wz] = P(u, v);
         b.box('window', 0.75, 1.05, 0.1, wx, wy, wz, rot, false);
+        windows.push({ u, v: v > 0 ? dd / 2 : -dd / 2, floor: f, y: wy });
         if (!stone || rand() < 0.5) {
           const sv = v > 0 ? 0.1 : -0.1;
           for (const side of [-1, 1]) {
@@ -346,13 +423,21 @@ x: number, z: number, rot: number, w: number, d: number, h: number, rand: () => 
   const thatch = opts.roof === 'thatch';
   const roofH = Math.min(W, D) * (thatch ? 0.7 + rand() * 0.1 : 0.42 + rand() * 0.18);
   b.gable(opts.roof ?? 'roofTile', W, D, roofH, x, top, z, rot, thatch ? 0.75 : 0.45);
+  let chimney: HouseShape['chimney'] = null;
   if (opts.chimney) {
     const u = W * (rand() < 0.5 ? 0.3 : -0.3);
-    const [cx, cz] = P(u, (rand() - 0.5) * D * 0.3);
+    const v = (rand() - 0.5) * D * 0.3;
+    const [cx, cz] = P(u, v);
     b.box('stone', 0.9, roofH + 1.6, 0.9, cx, top, cz, rot);
     b.box('stone', 1.1, 0.25, 1.1, cx, top + roofH + 1.6, cz, rot, false);
     if (opts.forge || rand() < 0.04) chimneys.push({ x: cx, y: top + roofH + 1.9, z: cz, strength: opts.forge ? 1.4 : 0.45 });
+    chimney = { u, v };
   }
+  const [tx, tz] = P(doorU, d / 2 + 0.05);
+  return {
+    x, z, rot, w, d, h, W, D, y0: y, fy, groundTop, top, floors, stone, wall: hollow ? t : 0, hollow,
+    door: { u: doorU, w: DW, h: DH, x: tx, y: fy + 0.04, z: tz }, windows, roofH, chimney,
+  };
 }
 
 
@@ -369,6 +454,12 @@ export class Emberhold {
   readonly smoke: Smoke;
   readonly materials: Record<Bucket, THREE.Material>;
   private b = new Builder();
+  /** Every building, with its kind, household and door. */
+  readonly buildings: Building[] = [];
+  keep = { x: 0, z: 0, y: 0, size: 24, rot: 0.1 };
+  /** The curtain walls, segment by segment (for stairs up to the wall walk). */
+  readonly wallSegs: { ring: string; ax: number; az: number; bx: number; bz: number; top: number; thick: number; mid: number }[] = [];
+  well = { x: 0, z: 0 };
 
   constructor(private hf: Heightfield) {
     const rand = mulberry32(1919);
@@ -392,6 +483,7 @@ export class Emberhold {
     this.highHalls(rand, at);
 
     this.chimneys.push({ x: this.forgeStack.x, y: this.forgeStack.y, z: this.forgeStack.z, strength: 4 });
+    buildFootprints(this.buildings, [{ x: this.keep.x, z: this.keep.z, rot: this.keep.rot, hw: 16, hd: 16 }]);
     this.materials = buildingMaterials(this.uNight);
     this.group = this.b.merge(this.materials);
     this.smoke = new Smoke(this.chimneys);
@@ -493,6 +585,7 @@ export class Emberhold {
       const base = Math.min(baseAt(p.x, p.z), baseAt(q.x, q.z)) - 4;
       const top = Math.max(baseAt(p.x, p.z), baseAt(q.x, q.z)) + height;
       b.box('stone', len + 0.6, top - base, thick, cx, base, cz, rot);
+      this.wallSegs.push({ ring: name, ax: p.x, az: p.z, bx: q.x, bz: q.z, top, thick, mid });
       // Crenellations along the outer edge of the wall walk.
       const nx = Math.cos(mid), nz = Math.sin(mid);
       const merlons = Math.floor(len / 2.2);
@@ -556,13 +649,66 @@ export class Emberhold {
     }
   }
 
-  /** A house: walls, door, windows, roof and maybe a chimney. */
-  private house(x: number, z: number, rot: number, w: number, d: number, h: number, rand: () => number, opts: HouseOpts = {}) {
-    buildHouse(this.b, (px, pz) => this.ground(px, pz), this.chimneys, x, z, rot, w, d, h, rand, opts);
+  /** Footprints already taken, so no building is put up through another. */
+  private footprints: Footprint[] = [];
+  private scratch = new Builder();
+
+  private taken(x: number, z: number, rot: number, w: number, d: number, margin = 0.4) {
+    const f = { x, z, rot, hw: w / 2 + margin, hd: d / 2 + margin };
+    return this.footprints.some((o) => footprintsOverlap(f, o));
+  }
+
+  private reserve(x: number, z: number, rot: number, w: number, d: number) {
+    this.footprints.push({ x, z, rot, hw: w / 2, hd: d / 2 });
+  }
+
+  /**
+   * A house: walls, door, windows, roof and maybe a chimney, recorded in the registry.
+   * If its plot is already taken it is built into a scratch builder and thrown away, so the
+   * random stream (and with it the rest of the town) stays exactly as it was.
+   */
+  private house(x: number, z: number, rot: number, w: number, d: number, h: number, rand: () => number, opts: HouseOpts,
+    kind: BuildingKind, ring: Ring, household = '', force = false): Building | null {
+    // The plot, and a clear apron in front of the door (so nobody's front door opens onto a wall).
+    const [ax, az] = [x + Math.sin(rot) * (d / 2 + 1.6), z + Math.cos(rot) * (d / 2 + 1.6)];
+    // And no front door perched over a terrace drop the steps couldn't reach down.
+    const cr = Math.cos(rot), sr = Math.sin(rot);
+    const Pg = (u: number, v: number) => this.ground(x + u * cr + v * sr, z - u * sr + v * cr);
+    const floorY = Math.max(Pg(-w / 2, -d / 2), Pg(w / 2, -d / 2), Pg(-w / 2, d / 2), Pg(w / 2, d / 2));
+    const drop = floorY - Math.min(Pg(-w / 4, d / 2 + 3), Pg(0, d / 2 + 3), Pg(w / 4, d / 2 + 3));
+    const blocked = !force && (this.taken(x, z, rot, w, d) || this.taken(ax, az, rot, w, 3.2, 0) || drop > 2.4);
+    const c0 = this.b.colliders.length;
+    const shape = buildHouse(blocked ? this.scratch : this.b, (px, pz) => this.ground(px, pz), blocked ? [] : this.chimneys,
+      x, z, rot, w, d, h, rand, { hollow: true, ...opts });
+    if (blocked) { this.scratch = new Builder(); return null; }
+    this.reserve(x, z, rot, shape.W, shape.D);
+    const reg = this.register(shape, kind, ring, household);
+    reg.colRange = [c0, this.b.colliders.length];
+    return reg;
+  }
+
+  private register(shape: HouseShape, kind: BuildingKind, ring: Ring, household: string): Building {
+    const area = shape.w * shape.d;
+    const beds = kind === 'barracks' ? 30 : kind === 'servants' ? 14 : kind === 'swornHall' ? 8
+      : kind === 'house' || kind === 'swornHouse' || kind === 'bakery' || kind === 'chandlery' || kind === 'weaver' || kind === 'cooper'
+        ? Math.max(2, Math.min(8, Math.round((area * shape.floors) / 30))) : kind === 'familyWing' ? 10 : kind === 'nurseryWing' ? 4
+          : kind === 'inn' ? 4 : kind === 'smithy' ? 2 : 0;
+    const b: Building = {
+      ...shape, id: this.buildings.length, kind, ring, household, name: KIND_NAMES[kind], beds, access: 'private',
+    };
+    this.buildings.push(b);
+    return b;
   }
 
   private lowerYard(rand: () => number, at: (a: number, r: number) => THREE.Vector2) {
     const b = this.b;
+    // The barracks by the south gate claim their ground first; the rows are fitted round them.
+    const barracks = [-1, 1].map((s) => {
+      const p = at(SOUTH + s * 0.12, E.outerR - 35);
+      const rot = -(SOUTH + s * 0.12) + Math.PI / 2;
+      this.reserve(p.x, p.y, rot, 30, 10);
+      return { p, rot };
+    });
     // Rows of buildings along ring streets; radial lanes every so often.
     // Back-to-back pairs of rows with lanes between, and a last row against the wall.
     const rows = [E.middleR + 36, E.middleR + 56, E.middleR + 76, E.middleR + 96, E.outerR - 24];
@@ -584,35 +730,62 @@ export class Emberhold {
         if (kind < 0.07) {
           // Granary tower
           const y = this.ground(p.x, p.y) - 1;
+          if (this.taken(p.x, p.y, rot, 10, 10)) continue;
+          this.reserve(p.x, p.y, rot, 10, 10);
           b.cyl('stone', 5, 15, p.x, y, p.y, 18);
           b.cone('roofTile', 6, 7, p.x, y + 15, p.y, 18);
         } else if (kind < 0.16) {
           // Smithy / furnace shed: stone, big chimney
-          this.house(p.x, p.y, rot, w + 3, d + 2, h, rand, { stone: true, chimney: true, roof: 'roofSlate', forge: true });
+          this.house(p.x, p.y, rot, w + 3, d + 2, h, rand, { stone: true, chimney: true, roof: 'roofSlate', forge: true }, 'smithy', 'lower');
         } else if (kind < 0.24 && r > E.middleR + 90) {
           // Stable: long and low
-          this.house(p.x, p.y, rot, w + 10, d, 4.2, rand, { timber: true });
+          this.house(p.x, p.y, rot, w + 10, d, 4.2, rand, { timber: true }, 'stable', 'lower');
         } else {
-          this.house(p.x, p.y, rot, w, d, h, rand, { timber: rand() < 0.7, chimney: rand() < 0.5 });
+          this.house(p.x, p.y, rot, w, d, h, rand, { timber: rand() < 0.7, chimney: rand() < 0.5 }, 'house', 'lower');
         }
       }
     }
     // Barracks by the south gate.
-    for (const s of [-1, 1]) {
-      const p = at(SOUTH + s * 0.12, E.outerR - 35);
-      this.house(p.x, p.y, -(SOUTH + s * 0.12) + Math.PI / 2, 30, 10, 7, rand, { stone: true, roof: 'roofSlate', chimney: true });
+    for (const { p, rot } of barracks) {
+      this.house(p.x, p.y, rot, 30, 10, 7, rand, { stone: true, roof: 'roofSlate', chimney: true }, 'barracks', 'lower', '', true);
     }
+    // Trades among the houses, chosen by a separate stream so the layout is untouched:
+    // an alehouse near each gate's avenue, and bakers, chandlers, weavers and coopers.
+    const trades = mulberry32(4242);
+    const houses = this.buildings.filter((x) => x.kind === 'house' && x.ring === 'lower');
+    for (const g of [SOUTH, NORTH]) {
+      let best: Building | null = null, bd = Infinity;
+      for (const hb of houses) {
+        const a = Math.atan2(hb.z - E.z, hb.x - E.x);
+        const sc = angDiff(a, g) * 400 - hb.w * hb.d * 0.05;
+        if (hb.kind === 'house' && hb.w * hb.d > 90 && sc < bd) { bd = sc; best = hb; }
+      }
+      if (best) { best.kind = 'inn'; best.name = KIND_NAMES.inn; best.beds = 4; }
+    }
+    const want: [BuildingKind, number][] = [['bakery', 7], ['chandlery', 4], ['weaver', 5], ['cooper', 4]];
+    for (const [k, n] of want) {
+      for (let i = 0; i < n; i++) {
+        const pool = houses.filter((x) => x.kind === 'house');
+        const pick = pool[Math.floor(trades() * pool.length)];
+        if (pick) { pick.kind = k; pick.name = KIND_NAMES[k]; }
+      }
+    }
+    for (const hb of this.buildings) if (hb.kind === 'inn') hb.access = 'open';
   }
 
   private middleCourts(rand: () => number, at: (a: number, r: number) => THREE.Vector2) {
     const b = this.b;
-    // The halls of the sworn households: Vhassarin, Ashmantle, Qelbar, Marrowyn, Halvane.
+    // The halls of the sworn households. The first keeps the rookery.
     const halls = [SOUTH + 0.55, SOUTH + 1.6, SOUTH + 2.7, SOUTH - 0.6, SOUTH - 1.7, SOUTH - 2.75];
     halls.forEach((a, i) => {
       const r = (E.keepR + E.middleR) / 2 + 12;
       const p = at(a, r);
       const rot = -a + Math.PI / 2;
-      this.house(p.x, p.y, rot, 34, 14, 11, rand, { stone: true, roof: 'roofSlate', chimney: true });
+      const hh = SWORN_HALLS[i];
+      const hall = this.house(p.x, p.y, rot, 34, 14, 11, rand, { stone: true, roof: 'roofSlate', chimney: true }, 'swornHall', 'middle', hh?.household ?? '', true)!;
+      hall.name = hh ? hh.name : 'Hall';
+      if (!hh) { hall.access = 'restricted'; hall.lockedWhy = 'The door is barred from inside.'; }
+      this.reserve(p.x, p.y, rot, 46, 34); // the courtyard
       // Courtyard wall around each hall.
       const c = Math.cos(rot), s = Math.sin(rot);
       for (const [u, v, len, along] of [[0, 16, 44, true], [0, -14, 44, true], [-22, 1, 30, false], [22, 1, 30, false]] as [number, number, number, boolean][]) {
@@ -633,17 +806,21 @@ export class Emberhold {
         const y = this.ground(t.x, t.y) - 1;
         b.cyl('stone', 3.4, 30, t.x, y, t.y, 16);
         b.cone('roofSlate', 4.4, 8, t.x, y + 30, t.y, 16);
+        this.reserve(t.x, t.y, 0, 7, 7);
       }
     });
     // Houses of the sworn families in two rings between the halls, with gardens behind.
+    // Each belongs to the household whose hall is nearest round the ring.
     for (const [r0, inward] of [[E.middleR - 22, true], [E.keepR + 48, false]] as [number, boolean][]) {
       for (let a = 0; a < Math.PI * 2;) {
         const w = 10 + rand() * 7;
         a += (w + 5 + rand() * 6) / r0;
         if (halls.some((h) => angDiff(a, h) < 0.2) || angDiff(a, SOUTH) < 0.09 || angDiff(a, NORTH) < 0.09) continue;
         const p = at(a, r0 + (rand() - 0.5) * 4);
+        let near = 0;
+        for (let k = 0; k < SWORN_HALLS.length; k++) if (angDiff(a, halls[k]) < angDiff(a, halls[near])) near = k;
         this.house(p.x, p.y, -a + Math.PI / 2 + (inward ? Math.PI : 0), w, 9 + rand() * 3, 6.5 + rand() * 4, rand,
-          { stone: rand() < 0.65, roof: rand() < 0.55 ? 'roofSlate' : 'roofTile', chimney: true, timber: true });
+          { stone: rand() < 0.65, roof: rand() < 0.55 ? 'roofSlate' : 'roofTile', chimney: true, timber: true }, 'swornHouse', 'middle', SWORN_HALLS[near].household);
       }
     }
   }
@@ -655,10 +832,38 @@ export class Emberhold {
     // The Hall of Cinders: a long hall facing the inner gate.
     const hall = at(SOUTH, 70);
     const rotHall = -SOUTH; // long axis points toward the gate
-    this.house(hall.x, hall.y, rotHall + Math.PI / 2, 26, 58, 20, rand, { stone: true, roof: 'roofSlate' });
+    this.house(hall.x, hall.y, rotHall + Math.PI / 2, 26, 58, 20, rand, { stone: true, roof: 'roofSlate' }, 'hallOfCinders', 'summit', 'Vaelaros', true);
     // The keep: a tall square tower with corner turrets.
     const kx = cx - 10, kz = cz - 20;
-    b.box('stone', 24, 62, 24, kx, y0 - 2, kz, 0.1);
+    this.keep = { x: kx, z: kz, y: y0 - 2, size: 24, rot: 0.1 };
+    this.reserve(kx, kz, 0.1, 34, 34);
+    {
+      // A guard hall on the ground floor behind a real door (facing the great court);
+      // the tower above is solid masonry for now.
+      const rot = 0.1, c = Math.cos(rot), sn = Math.sin(rot);
+      const P = (u: number, v: number): [number, number] => [kx + u * c + v * sn, kz - u * sn + v * c];
+      const corners = [[-12, -12], [12, -12], [-12, 12], [12, 12]].map(([u, v]) => this.ground(...P(u, v)));
+      const fy = Math.max(...corners) + 0.1, base = y0 - 2, t = 1.4;
+      const c0 = b.colliders.length;
+      hollowWalls(b, 'stone', P, rot, 24, 24, t, base, fy + 6, { u: 0, w: 1.6, top: fy + 2.7 });
+      b.box('stone', 24 - 2 * t + 0.02, fy + 0.04 - base, 24 - 2 * t + 0.02, kx, base, kz, rot);
+      { const [tx, tz] = P(0, 12 - t / 2); b.box('stone', 1.62, fy + 0.04 - base, t + 0.02, tx, base, tz, rot); }
+      b.box('stone', 24, base + 62 - (fy + 6), 24, kx, fy + 6, kz, rot);
+      const [ox, oz] = P(0, 12 + 0.9); const g0 = this.ground(ox, oz), rise = fy + 0.04 - g0;
+      if (rise > 0.18) {
+        const n = Math.min(10, Math.ceil(rise / 0.2));
+        for (let k = 0; k < n; k++) { const depth = 0.32 * (n - k); const [sx, sz] = P(0, 12 + depth / 2); b.box('stone', 2.4, g0 + ((k + 1) / n) * rise - (g0 - 0.6), depth, sx, g0 - 0.6, sz, rot); }
+      }
+      const [dx, dz] = P(0, 12.05);
+      b.box('timber', 2.0, 0.3, 0.25, dx, fy + 2.7, dz, rot, false);
+      const keep = this.register({
+        x: kx, z: kz, rot, w: 24, d: 24, h: 6, W: 24, D: 24, y0: base, fy, groundTop: fy + 6, top: fy + 6, floors: 1, stone: true, wall: t, hollow: true,
+        door: { u: 0, w: 1.6, h: 2.7, x: dx, y: fy + 0.04, z: dz }, windows: [], roofH: 0, chimney: null,
+      }, 'keep', 'summit', 'Vaelaros');
+      keep.colRange = [c0, b.colliders.length];
+      keep.access = 'restricted';
+      keep.lockedWhy = 'The keep is the lord\'s. The Halvane on its door don\'t move aside for a Vhassarin.';
+    }
     for (const [u, v] of [[-12, -12], [12, -12], [-12, 12], [12, 12]]) {
       const x = kx + u * Math.cos(0.1) + v * Math.sin(0.1), z = kz - u * Math.sin(0.1) + v * Math.cos(0.1);
       b.cyl('stone', 4, 72, x, y0 - 2, z, 16);
@@ -674,6 +879,8 @@ export class Emberhold {
     }
     // Ranges of lesser buildings along the inside of the summit wall: kitchens,
     // bakehouse, stores, servants' halls, the household's records.
+    const RANGE: BuildingKind[] = ['kitchen', 'store', 'servants', 'records', 'bakehouse', 'store', 'servants', 'kitchen', 'store', 'records', 'servants', 'store'];
+    let ri = 0;
     for (let a = SOUTH + 0.16; a < SOUTH + Math.PI * 2 - 0.16;) {
       const w = 22 + rand() * 16;
       const r0 = E.keepR - 13;
@@ -683,10 +890,12 @@ export class Emberhold {
       if ([0.9, -0.9, 2.4, -2.4].some((o) => angDiff(mid, SOUTH + o) < 0.08)) continue;
       if (angDiff(mid, NORTH) < 0.32 || angDiff(mid, SOUTH - 1.3) < 0.2 || angDiff(mid, SOUTH + 1.3) < 0.2) continue;
       const p = at(mid, r0);
-      this.house(p.x, p.y, -mid + Math.PI / 2 + Math.PI, w, 10, 8 + rand() * 3, rand, { stone: true, roof: 'roofSlate', chimney: rand() < 0.6 });
+      this.house(p.x, p.y, -mid + Math.PI / 2 + Math.PI, w, 10, 8 + rand() * 3, rand, { stone: true, roof: 'roofSlate', chimney: rand() < 0.6 },
+        RANGE[ri++ % RANGE.length], 'summit', 'Vaelaros', true);
     }
     // A well in the great court and an orchard wall around the nursery garden.
     const well = at(SOUTH + 0.5, 40);
+    this.well = { x: well.x, z: well.y };
     b.cyl('stone', 1.6, 1.1, well.x, this.ground(well.x, well.y) - 0.2, well.y, 16);
     b.box('timber', 0.25, 3, 0.25, well.x - 1.3, this.ground(well.x, well.y), well.y, 0, false);
     b.box('timber', 0.25, 3, 0.25, well.x + 1.3, this.ground(well.x, well.y), well.y, 0, false);
@@ -700,17 +909,36 @@ export class Emberhold {
     }
     // Family wing (east) and nursery wing (west).
     const east = at(SOUTH - 1.3, 95), west = at(SOUTH + 1.3, 95);
-    this.house(east.x, east.y, -(SOUTH - 1.3) + Math.PI / 2, 40, 14, 13, rand, { stone: true, roof: 'roofSlate', chimney: true });
-    this.house(west.x, west.y, -(SOUTH + 1.3) + Math.PI / 2, 34, 13, 12, rand, { stone: true, roof: 'roofSlate', chimney: true });
+    this.house(east.x, east.y, -(SOUTH - 1.3) + Math.PI / 2, 40, 14, 13, rand, { stone: true, roof: 'roofSlate', chimney: true }, 'familyWing', 'summit', 'Vaelaros', true);
+    this.house(west.x, west.y, -(SOUTH + 1.3) + Math.PI / 2, 34, 13, 12, rand, { stone: true, roof: 'roofSlate', chimney: true }, 'nurseryWing', 'summit', 'Vaelaros', true);
     // The forge hall to the north, with the great stack whose smoke rises over the land.
     const forge = at(NORTH, 95);
-    this.house(forge.x, forge.y, -NORTH + Math.PI / 2, 36, 20, 12, rand, { stone: true, roof: 'roofSlate' });
-    const sy = this.ground(forge.x, forge.y) - 1;
-    b.box('stone', 7, 52, 7, forge.x, sy, forge.y, -NORTH);
-    this.forgeStack.set(forge.x, sy + 52, forge.y);
+    this.house(forge.x, forge.y, -NORTH + Math.PI / 2, 36, 20, 12, rand, { stone: true, roof: 'roofSlate' }, 'forgeHall', 'summit', 'Ashmantle', true);
+    // The stack rises against the back of the hall, outside it, so the hall floor is clear.
+    const frot = -NORTH + Math.PI / 2;
+    const stx = forge.x + Math.sin(frot) * -13.6, stz = forge.y + Math.cos(frot) * -13.6;
+    const sy = this.ground(stx, stz) - 1;
+    b.box('stone', 7, 52, 7, stx, sy, stz, -NORTH);
+    this.reserve(stx, stz, -NORTH, 7, 7);
+    this.forgeStack.set(stx, sy + 52, stz);
     // The vault stair: a low stone house over the way down.
     const vault = at(NORTH + 0.5, 60);
-    this.house(vault.x, vault.y, -(NORTH + 0.5) + Math.PI / 2, 8, 8, 5, rand, { stone: true, roof: 'roofSlate' });
+    this.house(vault.x, vault.y, -(NORTH + 0.5) + Math.PI / 2, 8, 8, 5, rand, { stone: true, roof: 'roofSlate' }, 'vaultStair', 'summit', 'Vaelaros', true);
+    // Who may go where on the summit (Ilyan is sworn household, not blood).
+    for (const hb of this.buildings) {
+      if (hb.kind === 'familyWing' || hb.kind === 'nurseryWing') { hb.access = 'restricted'; hb.lockedWhy = 'The family\'s rooms. The Halvane guard on the inner doors turns you away.'; }
+      if (hb.kind === 'vaultStair') { hb.access = 'restricted'; hb.lockedWhy = 'The vault stair is barred. Only the blood goes down.'; }
+    }
   }
 }
+
+/** The five sworn households named in the story, by hall (the first keeps the rookery). The sixth hall is unassigned. */
+export const SWORN_HALLS: { household: string; name: string }[] = [
+  { household: 'Vhassarin', name: 'The Vhassarin hall' },
+  { household: 'Ashmantle', name: 'The Ashmantle hall' },
+  { household: 'Qelbar', name: 'The Qelbar hall' },
+  { household: 'Marrowyn', name: 'The Marrowyn hall' },
+  { household: 'Halvane', name: 'The Halvane hall' },
+];
+
 

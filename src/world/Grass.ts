@@ -2,6 +2,7 @@
 // follows the player. Each blade's world cell is hashed, so blades stay put as
 // you walk and the patch slides seamlessly.
 import * as THREE from 'three/webgpu';
+import { noGrass } from './Footprints';
 import {
   Fn, uniform, float, int, ivec2, vec2, vec3, uint, hash, floor, mix, smoothstep, clamp, max, dot, pow,
   sin, time, textureLoad, mx_noise_float, positionGeometry, instanceIndex, cameraPosition, positionWorld,
@@ -97,7 +98,12 @@ export class GrassLayer {
     const camDist = vec2(xz.x.sub(cameraPosition.x), xz.y.sub(cameraPosition.z)).length();
     let fade: any = float(1).sub(smoothstep(outerR.mul(0.72), outerR, camDist));
     if (innerR) fade = fade.mul(smoothstep(innerR.mul(0.75), innerR, camDist));
-    const present = smoothstep(r4.sub(0.08), r4.add(0.08), cover);
+    let present: any = smoothstep(r4.sub(0.08), r4.add(0.08), cover);
+    // Not up through the floors of Emberhold's buildings.
+    if (noGrass.tex) {
+      const lx = int(clamp(floor(xz.x.sub(noGrass.ox)), 0, noGrass.n - 1)), lz = int(clamp(floor(xz.y.sub(noGrass.oz)), 0, noGrass.n - 1));
+      present = present.mul(float(1).sub(textureLoad(noGrass.tex, ivec2(lx, lz)).x));
+    }
     const tall = mx_noise_float(xz.mul(0.045)).mul(0.5).add(0.5);
     const bladeH = float(spec.height).mul(mix(0.2, 0.55, tall)).mul(r3.mul(0.55).add(0.7))
       .mul(present).mul(fade).mul(cover.sqrt().mul(0.6).add(0.4)).mul(gf.y);
