@@ -60,30 +60,53 @@ class DrySink implements Sink {
 
 const tmpQ = new THREE.Quaternion(), tmpQ2 = new THREE.Quaternion(), Y = new THREE.Vector3(0, 1, 0), Z = new THREE.Vector3(0, 0, 1);
 
+/**
+ * Builds an interior's geometry straight into flat arrays (no three.js geometry objects per
+ * piece, no merging), which keeps a room's build to a few milliseconds.
+ */
+const BOX_FACES: [number[], [number, number, number]][] = (() => {
+  // Corner i: bit 0 = +x, bit 1 = +y, bit 2 = +z. Each face's four corners, wound so the
+  // triangles face outward (checked here rather than trusted).
+  const c = (i: number) => [i & 1 ? 1 : -1, i & 2 ? 1 : -1, i & 4 ? 1 : -1];
+  const faces: [number[], [number, number, number]][] = [
+    [[1, 3, 7, 5], [1, 0, 0]], [[0, 4, 6, 2], [-1, 0, 0]], [[2, 6, 7, 3], [0, 1, 0]],
+    [[0, 1, 5, 4], [0, -1, 0]], [[4, 5, 7, 6], [0, 0, 1]], [[0, 2, 3, 1], [0, 0, -1]],
+  ];
+  return faces.map(([q, n]) => {
+    const a = c(q[0]), b = c(q[1]), d = c(q[2]);
+    const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [d[0] - a[0], d[1] - a[1], d[2] - a[2]];
+    const x = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const order = x[0] * n[0] + x[1] * n[1] + x[2] * n[2] < 0 ? [...q].reverse() : q;
+    return [order, n] as [number[], [number, number, number]];
+  });
+})();
 class GeoSink implements Sink {
   spots: Spot[] = [];
-  parts: Record<Mat, THREE.BufferGeometry[]> = { paint: [], fire: [], day: [], iron: [], flame: [] };
+  parts: Record<Mat, { p: number[]; n: number[]; c: number[] }> = {
+    paint: { p: [], n: [], c: [] }, fire: { p: [], n: [], c: [] }, day: { p: [], n: [], c: [] }, iron: { p: [], n: [], c: [] }, flame: { p: [], n: [], c: [] },
+  };
   colliders: RAPIER.ColliderDesc[] = [];
+  private col = new THREE.Color();
   constructor(private b: Building) {}
 
-  private push(mat: Mat, g: THREE.BufferGeometry, col: number) {
-    const ng = g.index ? g.toNonIndexed() : g;
-    for (const k of Object.keys(ng.attributes)) if (k !== 'position' && k !== 'normal') ng.deleteAttribute(k);
-    const n = ng.attributes.position.count;
-    const c = new THREE.Color(col);
-    const arr = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) { arr[i * 3] = c.r; arr[i * 3 + 1] = c.g; arr[i * 3 + 2] = c.b; }
-    ng.setAttribute('color', new THREE.BufferAttribute(arr, 3));
-    this.parts[mat].push(ng);
-  }
-
   box(mat: Mat, w: number, h: number, d: number, u: number, v: number, y: number, ry = 0, col = C.oak, collide = false) {
-    const g = new THREE.BoxGeometry(w, h, d);
-    const yaw = this.b.rot + ry;
-    g.rotateY(yaw);
+    const yaw = this.b.rot + ry, cs = Math.cos(yaw), sn = Math.sin(yaw);
     const [x, z] = localToWorld(this.b, u, v);
-    g.translate(x, y + h / 2, z);
-    this.push(mat, g, col);
+    const P = this.parts[mat];
+    this.col.set(col);
+    const cr = this.col.r, cg = this.col.g, cb = this.col.b;
+    // Corners: bit 0 = +x, bit 1 = +y, bit 2 = +z (box local, before the turn).
+    const cx: number[] = [], cy: number[] = [], cz: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      const lx = (i & 1 ? 0.5 : -0.5) * w, ly = i & 2 ? h : 0, lz = (i & 4 ? 0.5 : -0.5) * d;
+      cx.push(x + lx * cs + lz * sn); cy.push(y + ly); cz.push(z - lx * sn + lz * cs);
+    }
+    for (const [q, [nx, ny, nz]] of BOX_FACES) {
+      const wx = nx * cs + nz * sn, wz = -nx * sn + nz * cs;
+      for (const i of [q[0], q[1], q[2], q[0], q[2], q[3]]) {
+        P.p.push(cx[i], cy[i], cz[i]); P.n.push(wx, ny, wz); P.c.push(cr, cg, cb);
+      }
+    }
     if (collide) {
       tmpQ.setFromAxisAngle(Y, yaw);
       this.colliders.push(RAPIER.ColliderDesc.cuboid(w / 2, h / 2, d / 2).setTranslation(x, y + h / 2, z)
@@ -92,15 +115,25 @@ class GeoSink implements Sink {
   }
 
   cyl(mat: Mat, r: number, h: number, u: number, v: number, y: number, col = C.oak, seg = 10, collide = false, r2?: number) {
-    const g = new THREE.CylinderGeometry(r2 ?? r, r, h, seg, 1);
     const [x, z] = localToWorld(this.b, u, v);
-    g.translate(x, y + h / 2, z);
-    this.push(mat, g, col);
-    if (collide) this.colliders.push(RAPIER.ColliderDesc.cylinder(h / 2, Math.max(r, r2 ?? r)).setTranslation(x, y + h / 2, z));
+    const P = this.parts[mat];
+    this.col.set(col);
+    const cr = this.col.r, cg = this.col.g, cb = this.col.b, rt = r2 ?? r;
+    const n = Math.max(5, Math.min(seg, 14));
+    const put = (px: number, py: number, pz: number, nx: number, ny: number, nz: number) => { P.p.push(px, py, pz); P.n.push(nx, ny, nz); P.c.push(cr, cg, cb); };
+    for (let i = 0; i < n; i++) {
+      const a0 = (i / n) * Math.PI * 2, a1 = ((i + 1) / n) * Math.PI * 2;
+      const c0 = Math.cos(a0), s0 = Math.sin(a0), c1 = Math.cos(a1), s1 = Math.sin(a1);
+      // Side.
+      put(x + c0 * r, y, z + s0 * r, c0, 0, s0); put(x + c1 * rt, y + h, z + s1 * rt, c1, 0, s1); put(x + c1 * r, y, z + s1 * r, c1, 0, s1);
+      put(x + c0 * r, y, z + s0 * r, c0, 0, s0); put(x + c0 * rt, y + h, z + s0 * rt, c0, 0, s0); put(x + c1 * rt, y + h, z + s1 * rt, c1, 0, s1);
+      // Top cap.
+      if (rt > 0.001) { put(x, y + h, z, 0, 1, 0); put(x + c1 * rt, y + h, z + s1 * rt, 0, 1, 0); put(x + c0 * rt, y + h, z + s0 * rt, 0, 1, 0); }
+    }
+    if (collide) this.colliders.push(RAPIER.ColliderDesc.cylinder(h / 2, Math.max(r, rt)).setTranslation(x, y + h / 2, z));
   }
 
   ramp(w: number, d: number, u: number, v: number, y: number, pitch: number) {
-    // A thin board under the stair treads, tilted along local u; collider only.
     const len = w / Math.cos(pitch);
     const [x, z] = localToWorld(this.b, u, v);
     tmpQ.setFromAxisAngle(Y, this.b.rot);
@@ -111,6 +144,17 @@ class GeoSink implements Sink {
   }
 
   spot(s: Spot) { this.spots.push(s); }
+
+  geometry(mat: Mat) {
+    const P = this.parts[mat];
+    if (!P.p.length) return null;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(P.p, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(P.n, 3));
+    g.setAttribute('color', new THREE.Float32BufferAttribute(P.c, 3));
+    g.computeBoundingSphere();
+    return g;
+  }
 }
 
 // ------------------------------------------------------------------ planning helpers
@@ -907,11 +951,12 @@ export class Interiors {
   /** A few hearth lights, given to the nearest burning hearths. */
   private lights: THREE.PointLight[] = [];
   private queue: Building[] = [];
+  private cool = 0;
 
   constructor(private buildings: Building[], private physics: Physics) {
     this.group.name = 'Interiors';
     this.mats = interiorMaterials(this.uDay);
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 2; i++) {
       const l = new THREE.PointLight(0xff9a50, 0, 9, 1.6);
       l.castShadow = false;
       this.lights.push(l);
@@ -935,23 +980,33 @@ export class Interiors {
   update(player: THREE.Vector3, day: number, night: number, t: number) {
     this.uDay.value = day;
     uFill.value = 0.035 + 0.05 * day;
-    // Stream: interiors within ~34 m of their door come in (one new per frame), beyond 55 m go out.
+    // Stream: interiors within ~24 m of their door come in (one every few frames, nearest
+    // first), and go out beyond 40 m. No more than 12 at once.
+    this.cool -= 1;
     for (const b of this.buildings) {
       if (!b.hollow) continue;
       const dx = b.door.x - player.x, dz = b.door.z - player.z;
-      if (Math.abs(dx) > 60 || Math.abs(dz) > 60) {
+      if (Math.abs(dx) > 50 || Math.abs(dz) > 50) {
         if (this.live.has(b.id)) this.unload(b.id);
         continue;
       }
       const d = Math.hypot(dx, dz);
-      const within = d < 34 + Math.max(b.w, b.d) * 0.5;
-      if (within && !this.live.has(b.id) && !this.queue.includes(b)) this.queue.push(b);
-      else if (!within && d > 55 && this.live.has(b.id)) this.unload(b.id);
+      const reach = 24 + Math.max(b.w, b.d) * 0.5;
+      if (d < reach && !this.live.has(b.id) && !this.queue.includes(b)) this.queue.push(b);
+      else if (d > reach + 16 && this.live.has(b.id)) this.unload(b.id);
     }
-    if (this.queue.length) {
-      this.queue.sort((a, b) => Math.hypot(a.door.x - player.x, a.door.z - player.z) - Math.hypot(b.door.x - player.x, b.door.z - player.z));
+    if (this.queue.length && this.cool <= 0) {
+      const dist = (b: Building) => Math.hypot(b.door.x - player.x, b.door.z - player.z);
+      this.queue.sort((a, b) => dist(a) - dist(b));
       const b = this.queue.shift()!;
-      if (!this.live.has(b.id)) this.load(b);
+      if (!this.live.has(b.id) && dist(b) < 24 + Math.max(b.w, b.d) * 0.5) {
+        if (this.live.size >= 12) {
+          let far: Live | null = null, fd = -1;
+          for (const l of this.live.values()) { const dd = dist(l.b); if (dd > fd) { fd = dd; far = l; } }
+          if (far && fd > dist(b)) this.unload(far.b.id);
+        }
+        if (this.live.size < 12) { this.load(b); this.cool = 3; }
+      }
     }
     // Hearth lights: the nearest few live hearths, flickering; brighter at night.
     const hearths: { x: number; y: number; z: number; d: number }[] = [];
@@ -964,8 +1019,7 @@ export class Interiors {
     hearths.sort((a, b) => a.d - b.d);
     this.lights.forEach((light, i) => {
       const h = hearths[i];
-      if (!h || h.d > 30) { light.intensity = 0; light.visible = false; return; }
-      light.visible = true;
+      if (!h || h.d > 30) { light.intensity = 0; return; }
       light.position.set(h.x, h.y + 0.3, h.z);
       const flick = 0.85 + 0.1 * Math.sin(t * 9.3 + i * 2) + 0.05 * Math.sin(t * 23.1 + i);
       light.intensity = (6 + night * 10) * flick;
@@ -981,13 +1035,10 @@ export class Interiors {
     const group = new THREE.Group();
     group.name = `interior_${b.id}`;
     for (const k of Object.keys(sink.parts) as Mat[]) {
-      const list = sink.parts[k];
-      if (!list.length) continue;
-      const g = mergeGeometries(list, false);
+      const g = sink.geometry(k);
       if (!g) continue;
-      g.computeBoundingSphere();
       const mesh = new THREE.Mesh(g, this.mats[k]);
-      mesh.castShadow = k === 'paint';
+      mesh.castShadow = false;
       mesh.receiveShadow = k === 'paint';
       group.add(mesh);
     }

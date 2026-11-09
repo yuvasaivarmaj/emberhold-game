@@ -47,7 +47,7 @@ export class Doors {
     }
     this.mesh = new THREE.InstancedMesh(leafGeometry(), doorMaterial(), this.list.length);
     this.mesh.name = 'Doors';
-    this.mesh.castShadow = true;
+    this.mesh.castShadow = false;
     this.mesh.receiveShadow = true;
     this.mesh.frustumCulled = false;
     for (let i = 0; i < this.list.length; i++) this.place(i);
@@ -141,7 +141,7 @@ export class Doors {
   openIds() { return this.list.filter((d) => d.target > 0).map((d) => d.b.id); }
 }
 
-/** A plank door with three iron straps and a ring pull, hinged at x = 0. */
+/** A plank door with three iron straps and a pull, hinged at x = 0 (kept light: 728 of them). */
 function leafGeometry() {
   const parts: THREE.BufferGeometry[] = [];
   const leaf = new THREE.BoxGeometry(LEAF_W, LEAF_H, LEAF_T);
@@ -152,11 +152,9 @@ function leafGeometry() {
     strap.translate(LEAF_W * 0.43, y, 0);
     parts.push(strap);
   }
-  for (const s of [-1, 1]) {
-    const ring = new THREE.TorusGeometry(0.07, 0.012, 6, 12);
-    ring.translate(LEAF_W - 0.18, 1.0, s * (LEAF_T / 2 + 0.02));
-    parts.push(ring);
-  }
+  const pull = new THREE.BoxGeometry(0.05, 0.16, LEAF_T + 0.07);
+  pull.translate(LEAF_W - 0.18, 1.0, 0);
+  parts.push(pull);
   const g = mergeGeometries(parts.map((p) => p.toNonIndexed()), false)!;
   g.computeBoundingSphere();
   return g;

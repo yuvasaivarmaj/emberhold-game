@@ -16,6 +16,7 @@ import { Interiors } from '../world/Interiors';
 import { Props } from '../world/Props';
 import type { Building } from '../world/Buildings';
 import { Population, type Agent } from '../people/Population';
+import { Characters } from '../people/Characters';
 import { TalkUI } from '../ui/TalkUI';
 import { castTalk, bark, objective } from '../story/Dialogue';
 import { beatForChapter } from '../story/Timeline';
@@ -170,9 +171,11 @@ export class Game {
       await nextFrame();
       this.props = new Props(this.hf, this.emberhold.buildings, this.emberhold.wallSegs, this.emberhold.materials);
       this.scene.add(this.props.group);
+      const characters = new Characters();
+      try { await characters.load(); } catch (e) { console.warn('[people] character models failed to load', e); }
       this.population = new Population(this.hf, this.emberhold.buildings, [...this.emberhold.colliders, ...this.props.colliders], this.interiors, this.doors, this.emberhold.well,
-        this.props.stalls, this.props.wells);
-      this.population.maxNear = ({ test: 14, low: 30, medium: 48, high: 70, ultra: 90 } as Record<string, number>)[this.settings.quality] ?? 48;
+        this.props.stalls, this.props.wells, characters);
+      this.population.maxNear = ({ test: 12, low: 14, medium: 24, high: 34, ultra: 48 } as Record<string, number>)[this.settings.quality] ?? 24;
       this.population.setBeat(beatForChapter(this.chapter));
       this.scene.add(this.population.group);
       this.talk = new TalkUI();
