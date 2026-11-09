@@ -176,6 +176,8 @@ export class Game {
       this.population = new Population(this.hf, this.emberhold.buildings, [...this.emberhold.colliders, ...this.props.colliders], this.interiors, this.doors, this.emberhold.well,
         this.props.stalls, this.props.wells, characters);
       this.population.maxNear = ({ test: 12, low: 14, medium: 24, high: 34, ultra: 48 } as Record<string, number>)[this.settings.quality] ?? 24;
+      // Dress the near-people pool now, while loading, rather than mid-walk.
+      if (characters.ready) characters.warm(Math.min(40, this.population.maxNear + 4));
       this.population.setBeat(beatForChapter(this.chapter));
       this.scene.add(this.population.group);
       this.talk = new TalkUI();

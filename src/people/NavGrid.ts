@@ -105,15 +105,14 @@ export class NavGrid {
   clearLine(ax: number, az: number, bx: number, bz: number) {
     const d = Math.hypot(bx - ax, bz - az);
     const n = Math.ceil(d / 0.45);
+    let prev = -1;
     for (let i = 1; i < n; i++) {
       const t = i / n;
       const k = this.cell(ax + (bx - ax) * t, az + (bz - az) * t);
       if (k < 0 || this.blocked[k]) return false;
       // Also refuse lines that would drop down a scarp between samples.
-      if (i > 1) {
-        const k2 = this.cell(ax + (bx - ax) * (i - 1) / n, az + (bz - az) * (i - 1) / n);
-        if (k2 >= 0 && Math.abs(this.height[k] - this.height[k2]) > MAX_STEP + 0.2) return false;
-      }
+      if (prev >= 0 && k !== prev && Math.abs(this.height[k] - this.height[prev]) > MAX_STEP + 0.2) return false;
+      prev = k;
     }
     return true;
   }
@@ -204,11 +203,19 @@ export class NavGrid {
     const out: [number, number][] = [];
     let i = 0;
     while (i < cells.length - 1) {
-      let j = i + 1;
-      const lim = Math.min(cells.length - 1, i + 90);
-      while (j + 1 <= lim && this.clearLine(cells[i][0], cells[i][1], cells[j + 1][0], cells[j + 1][1])) j++;
-      out.push(cells[j]);
-      i = j;
+      // The farthest cell (up to 90 on) in a straight, clear line: binary search, so a long
+      // path costs a few line checks per waypoint instead of one per cell.
+      let lo = i + 1, hi = Math.min(cells.length - 1, i + 90);
+      if (this.clearLine(cells[i][0], cells[i][1], cells[hi][0], cells[hi][1])) lo = hi;
+      else {
+        hi--;
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >> 1;
+          if (this.clearLine(cells[i][0], cells[i][1], cells[mid][0], cells[mid][1])) lo = mid; else hi = mid - 1;
+        }
+      }
+      out.push(cells[lo]);
+      i = lo;
     }
     out[out.length - 1] = [S.bx, S.bz];
     this.result = out;

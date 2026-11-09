@@ -128,11 +128,16 @@ export class Characters {
     return ch;
   }
 
+  /** Build n pooled people ahead of time (about half men, half women). */
+  warm(n: number) {
+    for (let i = this.pool.length; i < n; i++) this.pool.push(this.clone(i % 2 ? 'female' : 'male'));
+  }
+
   release(ch: Char) {
     ch.outer.removeFromParent();
     ch.mixer.stopAllAction();
     for (const c of ch.outer.children.slice()) if (c !== ch.pose) ch.outer.remove(c);
-    if (this.pool.length < 40) this.pool.push(ch);
+    if (this.pool.length < 52) this.pool.push(ch);
   }
 
   private clone(sex: 'male' | 'female'): Char {
