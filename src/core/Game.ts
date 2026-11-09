@@ -11,6 +11,14 @@ import { Emberhold } from '../world/Emberhold';
 import { Structures } from '../world/Structures';
 import { Quillhaven, quillhavenPlantings } from '../world/Quillhaven';
 import { Horses } from '../world/Horses';
+import { Doors, type Door } from '../world/Doors';
+import { Interiors } from '../world/Interiors';
+import { Props } from '../world/Props';
+import type { Building } from '../world/Buildings';
+import { Population, type Agent } from '../people/Population';
+import { TalkUI } from '../ui/TalkUI';
+import { castTalk, bark, objective } from '../story/Dialogue';
+import { beatForChapter } from '../story/Timeline';
 import { Hud } from '../ui/Hud';
 import { Torch } from '../player/Torch';
 import { updateCamAxes } from '../cinematic/Effects';
@@ -47,7 +55,17 @@ export class Game {
   structures!: Structures;
   quillhaven!: Quillhaven;
   horses!: Horses;
+  doors!: Doors;
+  interiors!: Interiors;
+  props!: Props;
   hud!: Hud;
+  /** The building the player is standing in (null outdoors). */
+  indoors: Building | null = null;
+  population!: Population;
+  talk!: TalkUI;
+  private talkingTo: Agent | null = null;
+  /** Story progress flags (saved). */
+  flags: Record<string, boolean | number | string> = {};
   torch!: Torch;
   private reachT = 0;
   private strikeT = 0;
@@ -140,6 +158,31 @@ export class Game {
       this.scene.add(this.structures.group);
       this.quillhaven = new Quillhaven(this.hf, this.emberhold.materials);
       this.scene.add(this.quillhaven.group);
+      this.doors = new Doors(this.emberhold.buildings, this.physics);
+      this.scene.add(this.doors.mesh);
+      this.doors.swingSound = (d, opening) => {
+        const c = this.camera.position;
+        this.audio.door(opening, 1 / (1 + Math.hypot(d.hx - c.x, d.hz - c.z) * 0.25));
+      };
+      this.interiors = new Interiors(this.emberhold.buildings, this.physics);
+      this.scene.add(this.interiors.group);
+      ui.progress(0.82, 'Waking the townsfolk…');
+      await nextFrame();
+      this.props = new Props(this.hf, this.emberhold.buildings, this.emberhold.wallSegs, this.emberhold.materials);
+      this.scene.add(this.props.group);
+      this.population = new Population(this.hf, this.emberhold.buildings, [...this.emberhold.colliders, ...this.props.colliders], this.interiors, this.doors, this.emberhold.well,
+        this.props.stalls, this.props.wells);
+      this.population.maxNear = ({ test: 14, low: 30, medium: 48, high: 70, ultra: 90 } as Record<string, number>)[this.settings.quality] ?? 48;
+      this.population.setBeat(beatForChapter(this.chapter));
+      this.scene.add(this.population.group);
+      this.talk = new TalkUI();
+      this.talk.onSet = (f) => this.setFlag(f);
+      this.talk.onClose = () => { if (this.talkingTo) this.population.release(this.talkingTo); this.talkingTo = null; };
+      this.interactionHooks.push((eye, look) => {
+        const a = this.population.inReach(eye, look);
+        if (!a) return null;
+        return { label: `Talk to ${a.r.cast ? a.r.cast.name : a.r.label}`, score: 3, run: () => this.talkTo(a) };
+      });
       if (this.params.has('nofortshadow')) this.emberhold.group.traverse((o) => { o.castShadow = false; });
 
       ui.progress(0.8, 'Sowing the meadows…');
@@ -156,7 +199,15 @@ export class Game {
       this.physics.addStatic(this.emberhold.colliders);
       this.physics.addStatic(this.structures.colliders);
       this.physics.addStatic(this.quillhaven.colliders);
+      this.physics.addStatic(this.props.colliders);
       this.player = new Player(this.physics, this.hf, SPAWN, this.camera);
+      this.player.surfaceHint = (x, y, z) => {
+        const b = this.indoors;
+        if (!b) return null;
+        void x; void z;
+        if (b.kind === 'stable') return 'mud';
+        return b.stone && y < b.fy + 0.6 && b.kind !== 'house' && b.kind !== 'swornHouse' ? 'stone' : 'wood';
+      };
       this.hud = new Hud(this.hf);
       this.hud.onDiscover = (name, sub) => this.hud.message(`<span class="found">Discovered</span><span class="place">${name}</span>${sub ? `<br><i>${sub}</i>` : ''}`, 10000);
       this.horses = new Horses(this.hf, this.physics);
@@ -306,6 +357,9 @@ export class Game {
     if (save) {
       this.chapter = save.chapter;
       this.playSeconds = save.playSeconds;
+      this.flags = {};
+      for (const [k, v] of Object.entries(save.flags)) if (k.startsWith('q.')) this.flags[k] = v;
+      this.population.setBeat(beatForChapter(this.chapter));
       this.player.setPose(save.x, save.y + 0.05, save.z, save.yaw, save.pitch);
       this.sky.setHour(save.hour);
       const rode = this.horses.list.find((h) => h.name === save.flags.riding);
@@ -320,6 +374,7 @@ export class Game {
 
   private newGame() {
     clearSave();
+    this.flags = {};
     this.audio.start(this.settings.volume);
     this.audio.resume();
     this.state = 'cinematic';
@@ -345,11 +400,14 @@ export class Game {
   /** The map, the things-to-do panel and hints, refreshed as you play. */
   private guide(dt: number) {
     const p = this.player, h = this.horses;
-    this.hud.update(p.feet.x, p.feet.z, p.yaw, { horses: h.list.map((x) => ({ x: x.x, z: x.z })) });
+    const inFort = Math.hypot(p.feet.x - 900, p.feet.z + 700) < 480;
+    const obj = objective(this.flags, inFort);
+    this.hud.update(p.feet.x, p.feet.z, p.yaw, { horses: h.list.map((x) => ({ x: x.x, z: x.z })), target: this.targetOf(obj.target) });
     this.hudTimer += dt;
     if (this.hudTimer < 0.25) return;
     this.hudTimer = 0;
     const ch = chapterById(this.chapter);
+    this.storyChecks();
     const can: string[] = [];
     if (h.mounted) {
       can.push('<kbd>W</kbd> trot · <kbd>Shift</kbd> canter, gallop · <kbd>Ctrl</kbd> walk');
@@ -361,7 +419,7 @@ export class Game {
     }
     for (const a of this.extraActions()) can.push(a);
     can.push('<kbd>M</kbd> map');
-    this.hud.objectives(ch.title, ch.objective, can);
+    this.hud.objectives(ch.title, obj.text, can);
     // One-time hints, when they become useful.
     if (this.playSeconds > 2) this.hud.tip('move', 'Walk with <kbd>W A S D</kbd>, run with <kbd>Shift</kbd>, jump with <kbd>Space</kbd>. Jump at a ledge to climb it.');
     if (this.playSeconds > 25) this.hud.tip('map', 'Press <kbd>M</kbd> for the map of the Verdance. The circle at the bottom right turns with you.');
@@ -369,6 +427,23 @@ export class Game {
     if (p.swimming) this.hud.tip('swim', 'You are swimming. Horses won\'t go into deep water.');
     const hr = this.sky.hour;
     if ((hr > 18.4 || hr < 5.5)) this.hud.tip('dark', 'Night is coming. Stand by a tree and press <kbd>F</kbd> to break off a branch, then <kbd>F</kbd> again to light it as a torch.');
+  }
+
+  /** Story moments triggered by where you are. */
+  private storyChecks() {
+    const f = this.flags, p = this.player.feet;
+    if (f['q.delivered'] && !f['q.vault']) {
+      const v = this.emberhold.buildings.find((b) => b.kind === 'vaultStair');
+      if (v) {
+        const dx = v.door.x - p.x, dz = v.door.z - p.z, d = Math.hypot(dx, dz);
+        const look = (-Math.sin(this.player.yaw) * dx - Math.cos(this.player.yaw) * dz) / Math.max(d, 0.1);
+        if (d < 14 && look > 0.6) {
+          this.hud.message('The vault stair: a low stone house, its door barred with old iron. Everything this house is, it keeps below.', 9000);
+          this.setFlag('q.vault');
+        }
+      }
+    }
+    if (f['q.vault'] && !f['q.home'] && this.indoors?.kind === 'swornHall' && this.indoors.household === 'Vhassarin') this.setFlag('q.home');
   }
 
   /** A dry branch off a nearby tree, if there is one within reach. */
@@ -440,6 +515,70 @@ export class Game {
   /** Extra contextual actions (torch, climbing) contributed by other systems. */
   extraActions: () => string[] = () => [];
 
+  private talkTo(a: Agent) {
+    const r = a.r, hour = this.sky.hour;
+    this.population.hold(a, 600);
+    this.talkingTo = a;
+    if (r.cast) this.talk.start(r.cast.name, r.cast.who, castTalk(r.cast.id, beatForChapter(this.chapter), this.flags, hour));
+    else this.talk.start(r.label, '', { start: { text: bark(r.role, hour, r.id * 7 + Math.floor(this.playSeconds / 40)) } });
+  }
+
+  setFlag(f: string) {
+    if (this.flags[f]) return;
+    this.flags[f] = true;
+    const o = objective(this.flags, true);
+    if (f.startsWith('q.')) this.hud.message(`<span class="found">${o.done ? 'Done' : 'Next'}</span>${o.text}`, 9000);
+    this.save();
+  }
+
+  /** Where the current objective points, for the map and minimap. */
+  private targetOf(t: string | null): { x: number; z: number; label?: string } | null {
+    if (!t) return null;
+    const B = this.emberhold.buildings, hr = this.sky.hour;
+    const at = (b: Building | undefined, label: string) => b ? { x: b.door.x, z: b.door.z, label } : null;
+    if (t === 'vault') return at(B.find((b) => b.kind === 'vaultStair'), 'The vault stair');
+    if (t === 'home') return at(B.find((b) => b.kind === 'swornHall' && b.household === 'Vhassarin'), 'The Vhassarin hall');
+    const p = this.population.whereIs(t, hr);
+    const names: Record<string, string> = { talen: 'Talen', boryn: 'Boryn Ashmantle', otherys: 'Your father' };
+    return p ? { x: p[0], z: p[1], label: names[t] } : null;
+  }
+
+  /** Whether a door is barred to Ilyan at this hour, and why. */
+  doorLock(b: Building): string | null {
+    const hr = this.sky.hour;
+    if (b.access === 'restricted') return b.lockedWhy ?? 'The door is barred.';
+    if (b.household === 'Vhassarin' && b.kind === 'swornHall') return null; // home
+    if (b.access === 'open') return hr >= 1 && hr < 6 ? 'The alehouse is shut for the night.' : null;
+    return hr >= 22 || hr < 6 ? 'The door is barred for the night.' : null;
+  }
+
+  /** The one thing E would do right now: talk, open a door, take a horse. */
+  private interaction(look: THREE.Vector3): { label: string; run: () => void } | null {
+    const eye = this.camera.position;
+    const extra = this.interactionHooks.map((f) => f(eye, look)).filter((x) => x) as { label: string; run: () => void; score: number }[];
+    extra.sort((a, b) => b.score - a.score);
+    if (extra[0]) return extra[0];
+    const door: Door | null = this.doors.inReach(eye, look);
+    if (door) {
+      const b = door.b;
+      if (door.target > 0) return { label: 'Close the door', run: () => this.doors.closeDoor(door) };
+      const why = this.doorLock(b);
+      if (why) return { label: `${b.name} <span class="dim">· locked</span>`, run: () => { this.audio.rattle(); this.hud.message(why, 4000); } };
+      return { label: `Open the door <span class="dim">· ${b.name}</span>`, run: () => this.doors.openDoor(door, 8) };
+    }
+    const near = this.horses.nearest(this.player.feet, look);
+    if (near) return { label: `Ride${near.name === 'Ashfoot' ? ' Ashfoot' : ''}`, run: () => this.mountHorse(near) };
+    return null;
+  }
+
+  /** Input that only lets you look around (while talking). */
+  private stillInput(input: Input): Input {
+    return { down: () => false, hit: () => false, mouseDX: input.mouseDX, mouseDY: input.mouseDY } as unknown as Input;
+  }
+
+  /** Other systems (people, objects) offer things to do here. */
+  interactionHooks: ((eye: THREE.Vector3, look: THREE.Vector3) => { label: string; run: () => void; score: number } | null)[] = [];
+
   private mountHorse(h: import('../world/Horses').Horse) {
     this.player.setActive(false);
     this.horses.mount(h);
@@ -458,7 +597,7 @@ export class Game {
     const d: SaveData = {
       v: 1, chapter: this.chapter, x: p.feet.x, y: p.feet.y, z: p.feet.z, yaw: p.yaw, pitch: p.pitch,
       hour: this.sky.hour,
-      flags: this.horses?.mounted ? { riding: this.horses.mounted.name, horseYaw: this.horses.mounted.yaw } : {},
+      flags: { ...this.flags, ...(this.horses?.mounted ? { riding: this.horses.mounted.name, horseYaw: this.horses.mounted.yaw } : {}) },
       savedAt: Date.now(), playSeconds: Math.round(this.playSeconds),
     };
     writeSave(d);
@@ -527,6 +666,14 @@ export class Game {
     updateCamAxes(this.camera);
     this.sky.update(dt, this.renderer, cam);
     this.emberhold.update(dt, this.sky.uNight.value as number);
+    if (this.doors && this.player) {
+      this.doors.update(dt, this.player.feet);
+      this.interiors.update(this.player.feet, this.sky.dayFactor, this.sky.uNight.value as number, this.clock.getElapsed());
+      this.indoors = this.interiors.inside(this.player.feet);
+      this.audio.setIndoors(this.indoors ? 1 : 0);
+      this.population?.update(dt, this.sky.hour, this.player.feet, this.camera, this.scene, this.clock.getElapsed());
+      this.props?.update(this.player.feet, this.sky.uNight.value as number, this.clock.getElapsed());
+    }
     this.quillhaven.update(dt, this.sky.uNight.value as number);
     if (this.horses) {
       const ridden = this.horses.mounted;
@@ -585,14 +732,20 @@ export class Game {
           this.hands.riding = false;
         }
       } else {
-        const ev = this.player.update(dt, input, this.settings);
+        const talking = this.talk.open;
+        if (talking) {
+          for (let i = 0; i < 4; i++) if (input.hit(`Digit${i + 1}`)) this.talk.choose(i);
+          if (input.hit('KeyE') || input.hit('Space')) this.talk.advance();
+          if (this.talkingTo && Math.hypot(this.talkingTo.x - this.player.feet.x, this.talkingTo.z - this.player.feet.z) > 4) this.talk.close();
+        }
+        const ev = this.player.update(dt, talking ? this.stillInput(input) : input, this.settings);
         this.hands.reach = Math.max(this.hands.reach * (this.reachT > 0 ? 1 : 0), this.player.climbReach);
         if (ev.footstep) this.audio.footstep(ev.footstep.surface, ev.footstep.intensity);
         if (ev.landed) this.audio.landed(ev.landed, this.player.surface);
         const look = new THREE.Vector3(-Math.sin(this.player.yaw), 0, -Math.cos(this.player.yaw));
-        const near = horses.nearest(this.player.feet, look);
-        this.ui.prompt(near ? `<kbd>E</kbd> Ride${near.name === 'Ashfoot' ? ' Ashfoot' : ''}` : null);
-        if (near && input.hit('KeyE')) this.mountHorse(near);
+        const act = this.talk.open ? null : this.interaction(look);
+        this.ui.prompt(act ? `<kbd>E</kbd> ${act.label}` : null);
+        if (act && input.hit('KeyE') && !talking) act.run();
       }
       if (input.hit('KeyM')) this.hud.toggleMap();
       this.torchControl(dt);
@@ -634,7 +787,7 @@ export class Game {
       if (this.settings.showFps) {
         const info = this.renderer.info.render;
         const p = this.player.feet;
-        this.ui.fps(`${Math.round(this.fpsFrames / this.fpsTime)} fps · ${Math.round(this.resScale * 100)}% res\n${(info.triangles / 1e6).toFixed(2)}M tris · ${info.drawCalls} draws\n${p.x.toFixed(0)}, ${p.y.toFixed(1)}, ${p.z.toFixed(0)}`);
+        this.ui.fps(`${Math.round(this.fpsFrames / this.fpsTime)} fps · ${Math.round(this.resScale * 100)}% res\n${(info.triangles / 1e6).toFixed(2)}M tris · ${info.drawCalls} draws\n${p.x.toFixed(0)}, ${p.y.toFixed(1)}, ${p.z.toFixed(0)}\n${this.population.activeCount} people near · ${this.population.drawnNear} drawn · ${this.interiors.count} interiors`);
       } else this.ui.fps(null);
       this.fpsFrames = 0; this.fpsTime = 0;
     }

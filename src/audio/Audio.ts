@@ -118,18 +118,19 @@ export class GameAudio {
     this.t += dt;
     const now = ctx.currentTime;
     const gust = 0.55 + 0.45 * Math.sin(this.t * 0.23) * Math.sin(this.t * 0.071 + 1.3);
-    const windLevel = (0.05 + 0.06 * gust) * env.wind * (1 + Math.max(0, env.altitude - 40) / 80);
+    const out = 1 - this.indoors * 0.8;
+    const windLevel = (0.05 + 0.06 * gust) * env.wind * (1 + Math.max(0, env.altitude - 40) / 80) * out;
     this.windGain.gain.setTargetAtTime(windLevel, now, 0.5);
     this.windFilter.frequency.setTargetAtTime(300 + gust * 380, now, 0.6);
     const river = 0.5 / (1 + Math.pow(Math.max(0, env.riverDist - 8) / 18, 1.6));
-    this.riverGain.gain.setTargetAtTime(river * 0.55, now, 0.3);
-    this.nightGain.gain.setTargetAtTime((1 - env.day) * 0.9, now, 1.0);
+    this.riverGain.gain.setTargetAtTime(river * 0.55 * out, now, 0.3);
+    this.nightGain.gain.setTargetAtTime((1 - env.day) * 0.9 * out, now, 1.0);
 
     // Birdsong in daylight, more of it near trees.
     this.birdTimer -= dt;
     if (this.birdTimer <= 0) {
       this.birdTimer = 1.2 + Math.random() * 5 / (0.4 + env.treesNear);
-      if (env.day > 0.4 && Math.random() < 0.85) this.bird(Math.random() * 2 - 1, (0.25 + env.treesNear * 0.6) * env.day);
+      if (env.day > 0.4 && Math.random() < 0.85 * out) this.bird(Math.random() * 2 - 1, (0.25 + env.treesNear * 0.6) * env.day);
     }
   }
 
@@ -350,6 +351,39 @@ export class GameAudio {
     if (level > 0.05 && Math.random() < 0.08 * level) this.noiseBurst(ctx.currentTime, 0.015 + Math.random() * 0.02, 'bandpass', 1500 + Math.random() * 3000, 1.5, 0.05 + Math.random() * 0.12 * level, 0.001);
   }
   private fireGain: GainNode | null = null;
+
+  /** A door: the latch lifting, a creak of old hinges, and a thump as it shuts. */
+  door(opening: boolean, gain = 1) {
+    const ctx = this.ctx; if (!ctx || ctx.state !== 'running' || gain < 0.02) return;
+    const t = ctx.currentTime;
+    this.noiseBurst(t, 0.04, 'bandpass', 2400, 4, 0.25 * gain, 0.001); // latch
+    // Creak: a pitched, wobbling squeal of dry hinges.
+    const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+    o.type = 'sawtooth';
+    const f0 = 180 + Math.random() * 120;
+    o.frequency.setValueAtTime(f0, t + 0.05);
+    o.frequency.linearRampToValueAtTime(f0 * (opening ? 1.6 : 0.8), t + 0.55);
+    f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 6;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.035 * gain, t + 0.12);
+    g.gain.exponentialRampToValueAtTime(0.0005, t + 0.6);
+    o.connect(f).connect(g).connect(this.master);
+    o.start(t + 0.05); o.stop(t + 0.65);
+    if (!opening) this.noiseBurst(t + 0.75, 0.18, 'lowpass', 220, 0.7, 0.5 * gain, 0.002); // thump
+  }
+
+  /** Trying a locked door: the latch rattles against the bar. */
+  rattle() {
+    const ctx = this.ctx; if (!ctx || ctx.state !== 'running') return;
+    const t = ctx.currentTime;
+    for (let i = 0; i < 3; i++) this.noiseBurst(t + i * 0.07, 0.04, 'bandpass', 1600 + i * 200, 3, 0.22, 0.001);
+  }
+
+  /** Indoors: the wind and the open air drop away. */
+  setIndoors(v: number) {
+    this.indoors += (v - this.indoors) * 0.08;
+  }
+  indoors = 0;
 
   landed(impact: number, surface: Surface) {
     this.footstep(surface, Math.min(1.6, impact / 4));

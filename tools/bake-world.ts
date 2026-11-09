@@ -236,6 +236,14 @@ for (const r of roads) {
       const a = Math.max(0, inWater - 3), b = Math.min(pts.length - 1, i + 3);
       const deck = Math.max(prof[a], prof[b], WATER_LEVEL + 4);
       for (let j = a; j <= b; j++) prof[j] = deck;
+      // Approach ramps: ease the road from the deck back down (or up) to the ground over
+      // ~80 m each side, so neither walkers nor horses meet a step at the bridge ends.
+      const RAMP = 20;
+      for (let k = 1; k <= RAMP; k++) {
+        const t = k / RAMP, s = t * t * (3 - 2 * t);
+        if (a - k >= 0) prof[a - k] = lerp(deck, prof[a - k], s);
+        if (b + k < prof.length) prof[b + k] = lerp(deck, prof[b + k], s);
+      }
       const [ax, az] = pts[a], [bx, bz] = pts[b];
       const len = Math.hypot(bx - ax, bz - az);
       bridges.push({ x: (ax + bx) / 2, z: (az + bz) / 2, dirX: (bx - ax) / len, dirZ: (bz - az) / len, deck, length: len, road: r.name });

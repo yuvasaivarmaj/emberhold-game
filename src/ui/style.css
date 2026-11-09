@@ -124,6 +124,7 @@ input[type=checkbox] { accent-color: var(--ember); width: 18px; height: 18px; }
 .prompt { position: absolute; top: 58%; left: 50%; transform: translateX(-50%); font-size: 15px; letter-spacing: 0.04em; color: #ece4d6; text-shadow: 0 1px 6px #000; opacity: 0; transition: opacity 0.25s; pointer-events: none; white-space: nowrap; }
 .prompt.on { opacity: 1; }
 .prompt kbd { margin-right: 6px; }
+.prompt .dim { opacity: 0.6; font-style: italic; }
 
 /* Map, things to do, messages */
 .minimap { position: absolute; right: 22px; bottom: 22px; width: 184px; height: 184px; border-radius: 50%;
@@ -153,3 +154,16 @@ input[type=checkbox] { accent-color: var(--ember); width: 18px; height: 18px; }
 
 .ring { position: absolute; left: 50%; top: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; opacity: 0; transition: opacity 0.2s;
   -webkit-mask: radial-gradient(circle, transparent 13px, #000 14px); mask: radial-gradient(circle, transparent 13px, #000 14px); }
+
+/* Conversations */
+.talk { position: absolute; left: 50%; bottom: 7%; transform: translateX(-50%); width: min(720px, 86vw); padding: 18px 24px 16px;
+  background: linear-gradient(180deg, rgba(20,16,13,0.88), rgba(14,11,9,0.94)); border: 1px solid rgba(200,170,120,0.35);
+  border-radius: 4px; color: #ece4d6; font-family: 'EB Garamond', Georgia, serif; box-shadow: 0 10px 40px rgba(0,0,0,0.5); }
+.talk-name { font-family: 'Cinzel', Georgia, serif; font-size: 15px; letter-spacing: 0.08em; color: #e0b070; }
+.talk-who { font-style: italic; font-size: 14px; opacity: 0.65; margin-bottom: 8px; }
+.talk-text { font-size: 19px; line-height: 1.45; }
+.talk-choices { margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
+.talk-choices div { font-size: 16px; color: #d8cbb2; cursor: pointer; }
+.talk-choices div:hover { color: #fff; }
+.talk-choices kbd { margin-right: 8px; }
+.talk-choices .end { opacity: 0.6; font-style: italic; }
