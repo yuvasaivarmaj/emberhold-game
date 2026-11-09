@@ -55,7 +55,7 @@ export class Props {
     this.fires.forEach((f, i) => { M.makeScale(f.strength, f.strength, f.strength).setPosition(f.x, f.y, f.z); this.flames.setMatrixAt(i, M); });
     this.flames.frustumCulled = false;
     this.group.add(this.flames);
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 2; i++) {
       const l = new THREE.PointLight(0xff8a3a, 0, 16, 1.6);
       this.lights.push(l);
       this.group.add(l);
@@ -66,12 +66,11 @@ export class Props {
   /** Lights on the fires nearest the player, after dusk. */
   update(player: THREE.Vector3, night: number, t: number) {
     this.uNight.value = Math.min(1, night * 1.5);
-    if (night < 0.05) { for (const l of this.lights) l.visible = false; return; }
+    if (night < 0.05) { for (const l of this.lights) l.intensity = 0; return; }
     const near = this.fires.map((f) => ({ f, d: Math.hypot(f.x - player.x, f.z - player.z) })).filter((x) => x.d < 60).sort((a, b) => a.d - b.d);
     this.lights.forEach((l, i) => {
       const n = near[i];
-      if (!n) { l.visible = false; return; }
-      l.visible = true;
+      if (!n) { l.intensity = 0; return; }
       l.position.set(n.f.x, n.f.y + 0.4, n.f.z);
       l.intensity = (14 + 6 * Math.sin(t * 9 + i * 1.7) * 0.3) * this.uNight.value * n.f.strength;
     });

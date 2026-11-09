@@ -200,7 +200,7 @@ function sampleH(x: number, z: number) {
 const roadDist = new Float32Array(N * N).fill(1e9);
 const roadTarget = new Float32Array(N * N);
 const roadHalf = new Float32Array(N * N);
-const bridges: { x: number; z: number; dirX: number; dirZ: number; deck: number; length: number; road: string }[] = [];
+const bridges: { x: number; z: number; dirX: number; dirZ: number; deck: number; length: number; road: string; deckA: number; deckB: number; hump: number }[] = [];
 for (const r of roads) {
   const pts = r.path;
   // Road surface profile: follow the ground, smoothed, never below the water.
@@ -234,19 +234,27 @@ for (const r of roads) {
     if (wet && inWater < 0) inWater = i;
     if ((!wet || i === pts.length - 1) && inWater >= 0) {
       const a = Math.max(0, inWater - 3), b = Math.min(pts.length - 1, i + 3);
-      const deck = Math.max(prof[a], prof[b], WATER_LEVEL + 4);
-      for (let j = a; j <= b; j++) prof[j] = deck;
-      // Approach ramps: ease the road from the deck back down (or up) to the ground over
-      // ~80 m each side, so neither walkers nor horses meet a step at the bridge ends.
-      const RAMP = 20;
+      // A humped deck that meets each bank at the road's own level (no causeway mounds):
+      // it rises from one bank to the other and arches up over the water.
+      const hA = Math.max(prof[a], WATER_LEVEL + 2.2), hB = Math.max(prof[b], WATER_LEVEL + 2.2);
+      const [ax0, az0] = pts[a], [bx0, bz0] = pts[b];
+      const span = Math.hypot(bx0 - ax0, bz0 - az0);
+      const hump = Math.max(0.8, Math.min(2.4, span * 0.022), WATER_LEVEL + 4.6 - (hA + hB) / 2);
+      for (let j = a; j <= b; j++) {
+        const t = (j - a) / Math.max(1, b - a);
+        prof[j] = lerp(hA, hB, t) + hump * Math.sin(Math.PI * t);
+      }
+      const deck = Math.max(hA, hB);
+      // A short easing either side, in case the banks' smoothing disagrees a little.
+      const RAMP = 6;
       for (let k = 1; k <= RAMP; k++) {
         const t = k / RAMP, s = t * t * (3 - 2 * t);
-        if (a - k >= 0) prof[a - k] = lerp(deck, prof[a - k], s);
-        if (b + k < prof.length) prof[b + k] = lerp(deck, prof[b + k], s);
+        if (a - k >= 0) prof[a - k] = lerp(hA, prof[a - k], s);
+        if (b + k < prof.length) prof[b + k] = lerp(hB, prof[b + k], s);
       }
       const [ax, az] = pts[a], [bx, bz] = pts[b];
       const len = Math.hypot(bx - ax, bz - az);
-      bridges.push({ x: (ax + bx) / 2, z: (az + bz) / 2, dirX: (bx - ax) / len, dirZ: (bz - az) / len, deck, length: len, road: r.name });
+      bridges.push({ x: (ax + bx) / 2, z: (az + bz) / 2, dirX: (bx - ax) / len, dirZ: (bz - az) / len, deck, length: len, road: r.name, deckA: hA, deckB: hB, hump });
       inWater = -1;
     }
   }

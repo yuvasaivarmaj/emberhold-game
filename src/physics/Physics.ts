@@ -92,29 +92,39 @@ export class Physics {
     }
   }
 
+  /** Colliders waiting to be created, nearest first (made a batch per frame). */
+  private pending: Streamed[] = [];
+
   /** Bring colliders near the player into the world and drop far ones. */
   stream(p: THREE.Vector3, force = false) {
-    if (!force && this.last.distanceToSquared(p) < 15 * 15) return;
-    this.last.copy(p);
-    for (const s of [...this.live]) {
-      if ((s.x - p.x) ** 2 + (s.z - p.z) ** 2 > DROP_R * DROP_R) {
-        if (s.collider) this.world.removeCollider(s.collider, false);
-        s.collider = null;
-        this.live.delete(s);
+    if (force || this.last.distanceToSquared(p) >= 15 * 15) {
+      this.last.copy(p);
+      for (const s of [...this.live]) {
+        if ((s.x - p.x) ** 2 + (s.z - p.z) ** 2 > DROP_R * DROP_R) {
+          if (s.collider) this.world.removeCollider(s.collider, false);
+          s.collider = null;
+          this.live.delete(s);
+        }
       }
+      const c0 = Math.floor((p.x - ADD_R + WORLD_HALF) / CELL), c1 = Math.floor((p.x + ADD_R + WORLD_HALF) / CELL);
+      const r0 = Math.floor((p.z - ADD_R + WORLD_HALF) / CELL), r1 = Math.floor((p.z + ADD_R + WORLD_HALF) / CELL);
+      this.pending = [];
+      for (let cz = r0; cz <= r1; cz++) for (let cx = c0; cx <= c1; cx++) {
+        const list = this.grid.get(cz * 1024 + cx);
+        if (!list) continue;
+        for (const s of list) if (!s.collider && (s.x - p.x) ** 2 + (s.z - p.z) ** 2 <= ADD_R * ADD_R) this.pending.push(s);
+      }
+      this.pending.sort((a, b) => ((b.x - p.x) ** 2 + (b.z - p.z) ** 2) - ((a.x - p.x) ** 2 + (a.z - p.z) ** 2));
     }
-    const c0 = Math.floor((p.x - ADD_R + WORLD_HALF) / CELL), c1 = Math.floor((p.x + ADD_R + WORLD_HALF) / CELL);
-    const r0 = Math.floor((p.z - ADD_R + WORLD_HALF) / CELL), r1 = Math.floor((p.z + ADD_R + WORLD_HALF) / CELL);
-    for (let cz = r0; cz <= r1; cz++) for (let cx = c0; cx <= c1; cx++) {
-      const list = this.grid.get(cz * 1024 + cx);
-      if (!list) continue;
-      for (const s of list) {
-        if (s.collider || (s.x - p.x) ** 2 + (s.z - p.z) ** 2 > ADD_R * ADD_R) continue;
-        const desc = s.make();
-        if (!desc) continue;
-        s.collider = this.world.createCollider(desc);
-        this.live.add(s);
-      }
+    // Nearest last in the list: pop them first. A few hundred a frame (all of them when forced).
+    let n = force ? Infinity : 220;
+    while (this.pending.length && n-- > 0) {
+      const s = this.pending.pop()!;
+      if (s.collider) continue;
+      const desc = s.make();
+      if (!desc) continue;
+      s.collider = this.world.createCollider(desc);
+      this.live.add(s);
     }
   }
 

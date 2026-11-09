@@ -105,90 +105,128 @@ export class NavGrid {
   clearLine(ax: number, az: number, bx: number, bz: number) {
     const d = Math.hypot(bx - ax, bz - az);
     const n = Math.ceil(d / 0.45);
+    let prev = -1;
     for (let i = 1; i < n; i++) {
       const t = i / n;
       const k = this.cell(ax + (bx - ax) * t, az + (bz - az) * t);
       if (k < 0 || this.blocked[k]) return false;
       // Also refuse lines that would drop down a scarp between samples.
-      if (i > 1) {
-        const k2 = this.cell(ax + (bx - ax) * (i - 1) / n, az + (bz - az) * (i - 1) / n);
-        if (k2 >= 0 && Math.abs(this.height[k] - this.height[k2]) > MAX_STEP + 0.2) return false;
-      }
+      if (prev >= 0 && k !== prev && Math.abs(this.height[k] - this.height[prev]) > MAX_STEP + 0.2) return false;
+      prev = k;
     }
     return true;
   }
 
-  /** A* from a to b; returns waypoints (pulled straight) or null. */
-  path(ax: number, az: number, bx: number, bz: number, maxExpand = 160000): [number, number][] | null {
+  /**
+   * A* from a to b, run a slice at a time so a long search never stalls a frame.
+   * begin() starts a search; step() expands up to `budget` cells and returns 'run' until
+   * the search is finished ('done', with `result` set to the pulled-straight waypoints)
+   * or gives up ('fail').
+   */
+  private srch: { s: number; t: number; tx: number; tz: number; bx: number; bz: number; gen: number; hn: number; expanded: number } | null = null;
+  result: [number, number][] | null = null;
+
+  begin(ax: number, az: number, bx: number, bz: number): boolean {
+    this.result = null;
     const a0 = this.nearestOpen(ax, az), b0 = this.nearestOpen(bx, bz);
-    if (!a0 || !b0) return null;
+    if (!a0 || !b0) { this.srch = null; return false; }
     const s = this.cell(a0[0], a0[1]), t = this.cell(b0[0], b0[1]);
-    if (s === t) return [[bx, bz]];
+    if (s === t) { this.result = [[bx, bz]]; this.srch = null; return false; }
     const gen = ++this.gen;
-    const tx = t % N, tz = Math.floor(t / N);
-    const hcost = (k: number) => {
-      const dx = Math.abs(k % N - tx), dz = Math.abs(Math.floor(k / N) - tz);
-      return (dx + dz + (Math.SQRT2 - 2) * Math.min(dx, dz)) * 1.25;
-    };
-    let hn = 0;
-    const push = (k: number, f: number) => {
-      let i = hn++;
-      while (i > 0) { const p = (i - 1) >> 1; if (this.heapF[p] <= f) break; this.heap[i] = this.heap[p]; this.heapF[i] = this.heapF[p]; i = p; }
-      this.heap[i] = k; this.heapF[i] = f;
-    };
-    const pop = () => {
-      const top = this.heap[0];
-      const k = this.heap[--hn], f = this.heapF[hn];
-      let i = 0;
-      for (;;) {
-        let c = 2 * i + 1;
-        if (c >= hn) break;
-        if (c + 1 < hn && this.heapF[c + 1] < this.heapF[c]) c++;
-        if (this.heapF[c] >= f) break;
-        this.heap[i] = this.heap[c]; this.heapF[i] = this.heapF[c]; i = c;
-      }
-      this.heap[i] = k; this.heapF[i] = f;
-      return top;
-    };
+    this.srch = { s, t, tx: t % N, tz: Math.floor(t / N), bx, bz, gen, hn: 0, expanded: 0 };
     this.g[s] = 0; this.stamp[s] = gen; this.from[s] = -1;
-    push(s, hcost(s));
-    let expanded = 0, found = false;
+    this.push(s, this.hcost(s));
+    return true;
+  }
+
+  private hcost(k: number) {
+    const S = this.srch!;
+    const dx = Math.abs(k % N - S.tx), dz = Math.abs(Math.floor(k / N) - S.tz);
+    return (dx + dz + (Math.SQRT2 - 2) * Math.min(dx, dz)) * 1.6;
+  }
+  private push(k: number, f: number) {
+    const S = this.srch!;
+    let i = S.hn++;
+    while (i > 0) { const p = (i - 1) >> 1; if (this.heapF[p] <= f) break; this.heap[i] = this.heap[p]; this.heapF[i] = this.heapF[p]; i = p; }
+    this.heap[i] = k; this.heapF[i] = f;
+  }
+  private pop() {
+    const S = this.srch!;
+    const top = this.heap[0];
+    const k = this.heap[--S.hn], f = this.heapF[S.hn];
+    let i = 0;
+    for (;;) {
+      let c = 2 * i + 1;
+      if (c >= S.hn) break;
+      if (c + 1 < S.hn && this.heapF[c + 1] < this.heapF[c]) c++;
+      if (this.heapF[c] >= f) break;
+      this.heap[i] = this.heap[c]; this.heapF[i] = this.heapF[c]; i = c;
+    }
+    this.heap[i] = k; this.heapF[i] = f;
+    return top;
+  }
+
+  step(budget = 4000): 'run' | 'done' | 'fail' {
+    const S = this.srch;
+    if (!S) return this.result ? 'done' : 'fail';
     const dirs = [1, -1, N, -N, N + 1, N - 1, -N + 1, -N - 1];
-    while (hn > 0) {
-      const k = pop();
-      if (this.closed[k] === gen) continue;
-      this.closed[k] = gen;
-      if (k === t) { found = true; break; }
-      if (++expanded > maxExpand) break;
+    let n = 0;
+    while (S.hn > 0 && n < budget) {
+      const k = this.pop();
+      if (this.closed[k] === S.gen) continue;
+      this.closed[k] = S.gen;
+      n++;
+      if (k === S.t) { this.finish(); return 'done'; }
+      if (++S.expanded > 90000) { this.srch = null; return 'fail'; }
       const kx = k % N;
       for (let di = 0; di < 8; di++) {
         const nk = k + dirs[di];
         const nx = nk % N;
-        if (nk < 0 || nk >= N * N || Math.abs(nx - kx) > 1 || this.blocked[nk] || this.closed[nk] === gen) continue;
+        if (nk < 0 || nk >= N * N || Math.abs(nx - kx) > 1 || this.blocked[nk] || this.closed[nk] === S.gen) continue;
         if (Math.abs(this.height[nk] - this.height[k]) > MAX_STEP) continue;
-        if (di >= 4 && (this.blocked[k + (nx - kx)] || this.blocked[k + (dirs[di] - (nx - kx))])) continue; // no corner cutting
+        if (di >= 4 && (this.blocked[k + (nx - kx)] || this.blocked[k + (dirs[di] - (nx - kx))])) continue;
         const ng = this.g[k] + (di >= 4 ? Math.SQRT2 : 1);
-        if (this.stamp[nk] === gen && ng >= this.g[nk]) continue;
-        this.stamp[nk] = gen; this.g[nk] = ng; this.from[nk] = k;
-        push(nk, ng + hcost(nk));
+        if (this.stamp[nk] === S.gen && ng >= this.g[nk]) continue;
+        this.stamp[nk] = S.gen; this.g[nk] = ng; this.from[nk] = k;
+        this.push(nk, ng + this.hcost(nk));
       }
     }
-    if (!found) return null;
+    if (S.hn === 0) { this.srch = null; return 'fail'; }
+    return 'run';
+  }
+
+  private finish() {
+    const S = this.srch!;
     const cells: [number, number][] = [];
-    for (let k = t; k !== -1; k = this.from[k]) cells.push([OX + (k % N) + 0.5, OZ + Math.floor(k / N) + 0.5]);
+    for (let k = S.t; k !== -1; k = this.from[k]) cells.push([OX + (k % N) + 0.5, OZ + Math.floor(k / N) + 0.5]);
     cells.reverse();
-    // Pull the path straight where the way is clear.
     const out: [number, number][] = [];
     let i = 0;
     while (i < cells.length - 1) {
-      // Reach as far ahead as can be seen in a straight line (looking at most 90 cells on).
-      let j = i + 1;
-      const lim = Math.min(cells.length - 1, i + 90);
-      while (j + 1 <= lim && this.clearLine(cells[i][0], cells[i][1], cells[j + 1][0], cells[j + 1][1])) j++;
-      out.push(cells[j]);
-      i = j;
+      // The farthest cell (up to 90 on) in a straight, clear line: binary search, so a long
+      // path costs a few line checks per waypoint instead of one per cell.
+      let lo = i + 1, hi = Math.min(cells.length - 1, i + 90);
+      if (this.clearLine(cells[i][0], cells[i][1], cells[hi][0], cells[hi][1])) lo = hi;
+      else {
+        hi--;
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >> 1;
+          if (this.clearLine(cells[i][0], cells[i][1], cells[mid][0], cells[mid][1])) lo = mid; else hi = mid - 1;
+        }
+      }
+      out.push(cells[lo]);
+      i = lo;
     }
-    out[out.length - 1] = [bx, bz];
-    return out;
+    out[out.length - 1] = [S.bx, S.bz];
+    this.result = out;
+    this.srch = null;
+  }
+
+  /** A whole search at once (for tests and short hops). */
+  path(ax: number, az: number, bx: number, bz: number): [number, number][] | null {
+    if (!this.begin(ax, az, bx, bz)) return this.result;
+    let st: 'run' | 'done' | 'fail' = 'run';
+    while (st === 'run') st = this.step(100000);
+    return st === 'done' ? this.result : null;
   }
 }

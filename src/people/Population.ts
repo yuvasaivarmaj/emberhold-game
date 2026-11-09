@@ -13,8 +13,9 @@ import type { Doors } from '../world/Doors';
 import { EMBERHOLD as E, fortShape } from '../world/Layout';
 import { SOUTH, NORTH } from '../world/Emberhold';
 import { NavGrid } from './NavGrid';
-import { type Look, DYES, SKIN, HAIR, makePerson, staticGeometry, bodyMaterial } from './Body';
-import { applyPose, type Mode, type PoseState } from './Pose';
+import { type Look, DYES, SKIN, HAIR, staticGeometry, bodyMaterial } from './Body';
+import { type Mode, type PoseState } from './Pose';
+import { type Characters, type Char, bakeFar } from './Characters';
 import { mulberry32 } from '../world/Noise';
 import { CAST, presentAt, type CastMember, type Where } from '../story/Cast';
 import type { Beat } from '../story/Timeline';
@@ -77,8 +78,8 @@ export interface Agent {
   waiting: boolean;            // for a path
   talkT: number;               // seconds left facing the player in conversation
   look: number;                // head turn smoothing
-  mesh: THREE.SkinnedMesh | null;
-  bones: THREE.Bone[] | null;
+  /** The full character, when near. */
+  char: Char | null;
   farSlot: number;             // index in the far instanced mesh, or -1
   pose: PoseState;
   stuckT: number;
@@ -118,12 +119,14 @@ export class Population {
 
   constructor(private hf: Heightfield, readonly buildings: Building[], colliders: import('../world/Emberhold').Collider[],
     private interiors: Interiors, private doors: Doors, private well: { x: number; z: number },
-    private stalls: { x: number; z: number; face: number }[] = [], private wells: { x: number; z: number }[] = []) {
+    private stalls: { x: number; z: number; face: number }[] = [], private wells: { x: number; z: number }[] = [], private chars: Characters | null = null) {
     this.group.name = 'People';
     const t0 = performance.now();
     this.nav = new NavGrid(hf, colliders, buildings);
     const t1 = performance.now();
     this.makePosts();
+    // Plan every interior now (cheap, and it keeps the planning out of play).
+    for (const b of buildings) planOf(b);
     this.populate();
     this.makeFar();
     console.info(`[people] ${this.residents.length} residents; nav grid ${(t1 - t0).toFixed(0)} ms`);
@@ -593,7 +596,7 @@ export class Population {
     const a: Agent = {
       r, x, y, z, yaw: g.post ? g.post.face : g.b ? g.b.rot + (g.spot?.face ?? 0) : 0, goal: g, legs: [], legI: 0, ptI: 0,
       inside: g.b, mode: g.mode, task: g.task, speed: 0, phase: r.seed, waiting: false, talkT: 0, look: 0,
-      mesh: null, bones: null, farSlot: -1, stuckT: 0,
+      char: null, farSlot: -1, stuckT: 0,
       pose: { mode: g.mode, phase: 0, speed: 0, lookYaw: 0, lookPitch: 0, t: 0, seed: r.seed, scale: r.look.height / 1.75, task: g.task },
     };
     if (g.post?.patrol) this.startPatrol(a, g.post.patrol, true);
@@ -716,22 +719,40 @@ export class Population {
     void sx; void sz;
   }
 
+  /** The search in progress (one at a time, a slice per frame). */
+  private searching: { a: Agent; leg: Leg; key: string; sx: number; sz: number; tx: number; tz: number } | null = null;
+
   private processPaths(budgetMs: number) {
     const t0 = performance.now();
-    while (this.pathQueue.length && performance.now() - t0 < budgetMs) {
-      const a = this.pathQueue.shift()!;
-      if (!a.r.agent) continue;
-      const leg = a.legs.find((l) => (l as any).want);
-      if (!leg) { a.waiting = false; continue; }
-      const [sx, sz, tx, tz, key] = (leg as any).want;
-      delete (leg as any).want;
-      const p = this.nav.path(sx, sz, tx, tz);
-      if (this.pathCache.size > 600) this.pathCache.delete(this.pathCache.keys().next().value!);
-      this.pathCache.set(key, p);
-      this.fillPath(leg, p, sx, sz, tx, tz);
-      a.waiting = false;
-      this.applySkip(a);
+    while (performance.now() - t0 < budgetMs) {
+      if (!this.searching) {
+        const a = this.pathQueue.shift();
+        if (!a) return;
+        if (!a.r.agent) continue;
+        const leg = a.legs.find((l) => (l as any).want);
+        if (!leg) { a.waiting = false; continue; }
+        const [sx, sz, tx, tz, key] = (leg as any).want;
+        delete (leg as any).want;
+        const cached = this.pathCache.get(key);
+        if (cached !== undefined) { this.fillPath(leg, cached, sx, sz, tx, tz); a.waiting = false; this.applySkip(a); continue; }
+        this.searching = { a, leg, key, sx, sz, tx, tz };
+        if (!this.nav.begin(sx, sz, tx, tz)) { this.endSearch(this.nav.result); continue; }
+      }
+      const st = this.nav.step(2500);
+      if (st === 'done') this.endSearch(this.nav.result);
+      else if (st === 'fail') this.endSearch(null);
     }
+  }
+
+  private endSearch(p: [number, number][] | null) {
+    const S = this.searching!;
+    this.searching = null;
+    if (this.pathCache.size > 800) this.pathCache.delete(this.pathCache.keys().next().value!);
+    this.pathCache.set(S.key, p);
+    if (!S.a.r.agent) return;
+    this.fillPath(S.leg, p, S.sx, S.sz, S.tx, S.tz);
+    S.a.waiting = false;
+    this.applySkip(S.a);
   }
 
   // ---------------------------------------------------------------- update
@@ -742,7 +763,8 @@ export class Population {
     // Who's near enough to matter, re-checked a few times a second.
     this.checkT -= dt;
     if (this.checkT <= 0) {
-      this.checkT = 0.5;
+      this.checkT = 0.25;
+      let activated = 0;
       for (const r of this.residents) {
         if (r.cast && !presentAt(r.cast, this.beat)) continue;
         if (r.agent) {
@@ -753,9 +775,10 @@ export class Population {
         // Inactive: where would they be?
         const hx = r.post ? r.post.x : r.home.x, hz = r.post ? r.post.z : r.home.z;
         if (Math.abs(hx - player.x) > ACTIVE_R + 200 || Math.abs(hz - player.z) > ACTIVE_R + 200) continue;
+        if (activated >= 14) continue; // a few at a time, so arriving in town doesn't stall
         const g = this.goal(r, hour);
         const [x, , z] = this.restPos(r, g);
-        if (Math.hypot(x - player.x, z - player.z) < ACTIVE_R) this.activate(r, hour);
+        if (Math.hypot(x - player.x, z - player.z) < ACTIVE_R) { this.activate(r, hour); activated++; }
       }
       // Has anyone's day moved on?
       for (const a of this.agents.values()) {
@@ -764,7 +787,7 @@ export class Population {
         if (g.key !== a.goal.key || (g.b && a.goal.b && g.spot !== a.goal.spot && a.legs.length === 0)) this.replan(a, g);
       }
     }
-    this.processPaths(4);
+    this.processPaths(2.5);
     // Move everyone.
     for (const a of this.agents.values()) this.step(a, dt, player, time);
     this.separate(dt, player);
@@ -875,8 +898,10 @@ export class Population {
     variants.push(this.look('gateGuard', '', R, false));
     variants.push(this.look('child', '', R, false, true));
     variants.forEach((L, i) => { L.cloth = i < 6 ? plain[i] : L.cloth; });
+    const farMat = new THREE.MeshStandardNodeMaterial({ vertexColors: true, roughness: 0.9 });
     for (const L of variants) {
-      const mesh = new THREE.InstancedMesh(staticGeometry(L), bodyMaterial(), 220);
+      const geo = this.chars?.ready ? bakeFar(this.chars, L, 0.3) : staticGeometry(L);
+      const mesh = new THREE.InstancedMesh(geo, this.chars?.ready ? farMat : bodyMaterial(), 220);
       mesh.count = 0; mesh.frustumCulled = false; mesh.castShadow = false; mesh.receiveShadow = true;
       this.group.add(mesh);
       this.far.push({ mesh, looks: [L] });
@@ -895,10 +920,9 @@ export class Population {
   }
 
   private dropMesh(a: Agent) {
-    if (a.mesh) {
-      this.group.remove(a.mesh);
-      a.mesh.skeleton.dispose();
-      a.mesh = null; a.bones = null;
+    if (a.char) {
+      this.chars?.release(a.char);
+      a.char = null;
     }
   }
 
@@ -915,16 +939,17 @@ export class Population {
     for (let i = 0; i < this.farCount.length; i++) this.farCount[i] = 0;
     let near = 0;
     for (const { a, d } of visible) {
-      const close = d < NEAR_R && near < this.maxNear;
+      const close = d < NEAR_R && near < this.maxNear && !!this.chars?.ready;
       if (close) {
         near++;
-        if (!a.mesh) {
-          const p = makePerson(a.r.look);
-          a.mesh = p.mesh; a.bones = p.bones;
-          if (a.r.look.garb === 'guard' || a.r.cast?.id === 'corwyn') a.mesh.add(spear(a.r.look.height / 1.75));
-          a.mesh.userData.agent = a;
-          this.group.add(a.mesh);
+        if (!a.char) {
+          a.char = this.chars!.make(a.r.look, a.r.seed);
+          if (a.r.look.garb === 'guard' || a.r.cast?.id === 'corwyn') a.char.outer.add(spear(a.r.look.height / 1.75));
+          this.group.add(a.char.outer);
         }
+        // Only the nearest few cast shadows.
+        const shadow = near <= 6;
+        if (shadow !== a.char.shadow) { a.char.shadow = shadow; a.char.model.traverse((o) => { if ((o as THREE.Mesh).isMesh) o.castShadow = shadow; }); }
         // Look at the player when they're close and in front.
         const toCam = Math.atan2(cam.x - a.x, cam.z - a.z);
         let rel = toCam - a.yaw;
@@ -936,9 +961,10 @@ export class Population {
         ps.mode = a.mode; ps.task = a.task; ps.speed = a.speed; ps.phase = a.phase; ps.lookYaw = a.look;
         ps.lookPitch = d < 6 ? Math.atan2(cam.y - (a.y + 1.6 * ps.scale), Math.max(0.5, d)) * 0.6 : 0;
         ps.t = time;
-        applyPose(a.bones!, ps);
-        a.mesh.position.set(a.x, a.y, a.z);
-        a.mesh.rotation.set(0, a.yaw, 0);
+        this.chars!.animate(a.char, ps, Math.min(0.1, Math.max(0, time - (a as any).lastT || 0.016)));
+        (a as any).lastT = time;
+        a.char.outer.position.set(a.x, a.y, a.z);
+        a.char.outer.rotation.set(0, a.yaw, 0);
       } else {
         this.dropMesh(a);
         if (a.inside) continue; // indoors far away: not drawn
@@ -948,6 +974,7 @@ export class Population {
         if (i >= f.mesh.instanceMatrix.count) continue;
         const bob = a.mode === 'walk' ? Math.abs(Math.sin(a.phase * Math.PI * 2)) * 0.03 : 0;
         const s = a.r.look.height / f.looks[0].height;
+        void s;
         this.q.setFromAxisAngle(this.up, a.yaw);
         this.m4.compose(this.v3.set(a.x, a.y + bob, a.z), this.q, this.one.set(s, s, s));
         f.mesh.setMatrixAt(i, this.m4);
@@ -961,7 +988,7 @@ export class Population {
   inReach(eye: THREE.Vector3, look: THREE.Vector3): Agent | null {
     let best: Agent | null = null, bs = -Infinity;
     for (const a of this.agents.values()) {
-      if (!a.mesh) continue;
+      if (!a.char) continue;
       const dx = a.x - eye.x, dz = a.z - eye.z;
       const d = Math.hypot(dx, dz);
       if (d > 2.8 || Math.abs(a.y + 1.2 - eye.y) > 1.6) continue;
@@ -989,7 +1016,7 @@ export class Population {
   }
 
   get activeCount() { return this.agents.size; }
-  get drawnNear() { let n = 0; for (const a of this.agents.values()) if (a.mesh) n++; return n; }
+  get drawnNear() { let n = 0; for (const a of this.agents.values()) if (a.char) n++; return n; }
 }
 
 let spearGeo: THREE.BufferGeometry | null = null;

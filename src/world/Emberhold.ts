@@ -263,19 +263,33 @@ export class Builder {
     this.add(bucket, g);
   }
 
-  merge(materials: Record<Bucket, THREE.Material>) {
+  /**
+   * Merge by material and by ~400 m square, so the camera and each shadow cascade only draw
+   * the parts of the fort they can see.
+   */
+  merge(materials: Record<Bucket, THREE.Material>, chunk = 400) {
     const group = new THREE.Group();
+    const v = new THREE.Vector3();
     for (const k of Object.keys(this.buckets) as Bucket[]) {
-      const list = this.buckets[k];
-      if (!list.length) continue;
-      const merged = mergeGeometries(list, false);
-      if (!merged) continue;
-      merged.computeBoundingSphere();
-      const mesh = new THREE.Mesh(merged, materials[k]);
-      mesh.castShadow = k !== 'window';
-      mesh.receiveShadow = true;
-      mesh.name = `emberhold_${k}`;
-      group.add(mesh);
+      const cells = new Map<string, THREE.BufferGeometry[]>();
+      for (const g of this.buckets[k]) {
+        if (!g.boundingBox) g.computeBoundingBox();
+        g.boundingBox!.getCenter(v);
+        const key = `${Math.floor(v.x / chunk)},${Math.floor(v.z / chunk)}`;
+        let l = cells.get(key);
+        if (!l) { l = []; cells.set(key, l); }
+        l.push(g);
+      }
+      for (const [key, list] of cells) {
+        const merged = mergeGeometries(list, false);
+        if (!merged) continue;
+        merged.computeBoundingSphere();
+        const mesh = new THREE.Mesh(merged, materials[k]);
+        mesh.castShadow = k !== 'window';
+        mesh.receiveShadow = true;
+        mesh.name = `emberhold_${k}_${key}`;
+        group.add(mesh);
+      }
     }
     return group;
   }

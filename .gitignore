@@ -5,3 +5,4 @@ dist
 public/data/verdance.*
 tools/.bake.mjs
 tools/.preview.ppm
+__pycache__/
